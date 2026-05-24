@@ -25,6 +25,7 @@ export { proposeSplit } from "./tools/propose-split.js";
 export { applySplit } from "./tools/apply-split.js";
 export { summarizeSlice } from "./tools/summarize-slice.js";
 export { routeReviewers } from "./tools/route-reviewers.js";
+export { decompose } from "./tools/decompose.js";
 
 // Utilities
 export { sha256, canonicalHash } from "./util/hash.js";

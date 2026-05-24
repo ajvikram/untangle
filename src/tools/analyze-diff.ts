@@ -252,16 +252,64 @@ export async function analyzeDiff(input: AnalyzeDiffInput): Promise<AnalyzeDiffO
     }
   }
 
-  // If LLM returned nothing, create a single catch-all concern
+  // If LLM returned nothing or failed, apply deterministic heuristic grouping based on directories and file extensions
   if (allClassified.length === 0) {
-    allClassified.push({
-      summary: "update code",
-      kind: "chore",
-      hunkIndices: allHunks.map((_, i) => i),
-      dependsOn: [],
-      confidence: 0.5,
-      risk: { touchesPublicAPI: false, touchesConfig: false, touchesSecurity: false },
-    });
+    const groups: Map<string, { kind: ConcernKind; hunks: number[]; files: Set<string> }> = new Map();
+
+    for (let i = 0; i < hunkPreviews.length; i++) {
+      const p = hunkPreviews[i]!;
+      const filePath = p.filePath;
+      const lowerPath = filePath.toLowerCase();
+
+      let kind: ConcernKind = "feature";
+      let groupKey = "source";
+
+      if (lowerPath.includes("test") || lowerPath.includes("spec") || lowerPath.includes("__tests__")) {
+        kind = "test";
+        groupKey = "tests";
+      } else if (
+        lowerPath.endsWith("json") ||
+        lowerPath.endsWith("yaml") ||
+        lowerPath.endsWith("yml") ||
+        lowerPath.endsWith("toml") ||
+        lowerPath.includes("config")
+      ) {
+        kind = "config";
+        groupKey = "config";
+      } else if (lowerPath.endsWith(".md")) {
+        kind = "docs";
+        groupKey = "docs";
+      } else {
+        // Group by directory structure (first folder name or root)
+        const parts = filePath.split("/");
+        if (parts.length > 1 && parts[0] !== "src") {
+          groupKey = `dir-${parts[0]}`;
+        } else if (parts.length > 2 && parts[0] === "src") {
+          groupKey = `src-${parts[1]}`;
+        } else {
+          groupKey = "core";
+        }
+      }
+
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { kind, hunks: [], files: new Set() });
+      }
+      const g = groups.get(groupKey)!;
+      g.hunks.push(i);
+      g.files.add(filePath);
+    }
+
+    // Convert groups into concerns
+    for (const [name, g] of groups.entries()) {
+      allClassified.push({
+        summary: `Decompose ${name} changes (${Array.from(g.files).join(", ")})`,
+        kind: g.kind,
+        hunkIndices: g.hunks,
+        dependsOn: [],
+        confidence: 0.9,
+        risk: { touchesPublicAPI: false, touchesConfig: g.kind === "config", touchesSecurity: false }
+      });
+    }
   }
 
   // Ensure every hunk is assigned

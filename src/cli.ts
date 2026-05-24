@@ -11,18 +11,20 @@ import { analyzeDiff } from "./tools/analyze-diff.js";
 import { proposeSplit } from "./tools/propose-split.js";
 import { applySplit } from "./tools/apply-split.js";
 import { routeReviewers } from "./tools/route-reviewers.js";
+import { decompose } from "./tools/decompose.js";
 import { logger } from "./util/logger.js";
 import type { Target } from "./schemas/types.js";
 
 const USAGE = `untangle — MCP-native PR decomposer
 
 Usage:
-  untangle score    [--repo path] [--branch name] [--base main]
-  untangle analyze  [--repo path] [--branch name] [--base main]
-  untangle propose  [--graph json-file]
-  untangle apply    [--proposal json-file] [--repo path] [--dry-run]
-  untangle route    [--proposal json-file] [--repo path] [--policy name] [--exclude users]
-  untangle mcp      (start MCP server — use untangle-mcp instead)
+  untangle score     [--repo path] [--branch name] [--base main]
+  untangle analyze   [--repo path] [--branch name] [--base main]
+  untangle propose   [--graph json-file]
+  untangle apply     [--proposal json-file] [--repo path] [--dry-run]
+  untangle route     [--proposal json-file] [--repo path] [--policy name] [--exclude users]
+  untangle decompose [--repo path] [--branch name] [--base base] [--dry-run] [--policy name] [--exclude users]
+  untangle mcp       (start MCP server — use untangle-mcp instead)
 `;
 
 async function main() {
@@ -148,6 +150,37 @@ async function main() {
           },
           dryRun: values["dry-run"],
           draftPRs: true,
+        });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
+      case "decompose": {
+        const { values } = parseArgs({
+          args: args.slice(1),
+          options: {
+            repo: { type: "string", default: "." },
+            branch: { type: "string" },
+            base: { type: "string", default: "main" },
+            "dry-run": { type: "boolean", default: false },
+            policy: { type: "string", default: "blame-weighted" },
+            exclude: { type: "string", default: "" },
+          },
+        });
+        const repoPath = fs.realpathSync(values.repo!);
+        const currentBranch = values.branch || execSync("git branch --show-current", { cwd: repoPath }).toString().trim() || "main";
+        const excludeUsers = values.exclude ? values.exclude.split(",").map(u => u.trim()) : [];
+        
+        const result = await decompose({
+          target: {
+            kind: "branch",
+            repo: repoPath,
+            branch: currentBranch,
+            base: values.base!,
+          },
+          dryRun: values["dry-run"],
+          draftPRs: true,
+          policy: values.policy as any,
+          excludeUsers,
         });
         console.log(JSON.stringify(result, null, 2));
         break;
