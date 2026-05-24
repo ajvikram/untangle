@@ -5,8 +5,11 @@
 
 import { parseArgs } from "node:util";
 import * as fs from "node:fs";
+import { execSync } from "node:child_process";
 import { scoreReviewEffort } from "./tools/score-review-effort.js";
 import { analyzeDiff } from "./tools/analyze-diff.js";
+import { proposeSplit } from "./tools/propose-split.js";
+import { applySplit } from "./tools/apply-split.js";
 import { routeReviewers } from "./tools/route-reviewers.js";
 import { logger } from "./util/logger.js";
 import type { Target } from "./schemas/types.js";
@@ -96,6 +99,55 @@ async function main() {
           repo: values.repo!,
           policy: values.policy as any,
           excludeUsers,
+        });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
+      case "propose": {
+        const { values } = parseArgs({
+          args: args.slice(1),
+          options: {
+            graph: { type: "string" },
+          },
+        });
+        if (!values.graph) {
+          throw new Error("Missing --graph JSON file argument");
+        }
+        const graphContent = fs.readFileSync(values.graph, "utf8");
+        const graph = JSON.parse(graphContent);
+        const result = await proposeSplit({ graph });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
+      case "apply": {
+        const { values } = parseArgs({
+          args: args.slice(1),
+          options: {
+            proposal: { type: "string" },
+            repo: { type: "string", default: "." },
+            "dry-run": { type: "boolean", default: false },
+          },
+        });
+        if (!values.proposal) {
+          throw new Error("Missing --proposal JSON file argument");
+        }
+        const proposalContent = fs.readFileSync(values.proposal, "utf8");
+        const proposal = JSON.parse(proposalContent);
+        
+        // Resolve current git branch and repo details
+        const repoPath = fs.realpathSync(values.repo!);
+        const currentBranch = execSync("git branch --show-current", { cwd: repoPath }).toString().trim() || "main";
+        
+        const result = await applySplit({
+          proposal,
+          target: {
+            kind: "branch",
+            repo: repoPath,
+            branch: currentBranch,
+            base: "main", // default base branch
+          },
+          dryRun: values["dry-run"],
+          draftPRs: true,
         });
         console.log(JSON.stringify(result, null, 2));
         break;
