@@ -153,3 +153,42 @@ export class UntangleErrorImpl extends Error implements UntangleError {
     this.details = details;
   }
 }
+
+// ---------------------------------------------------------------------------
+// RouteReviewers schemas
+// ---------------------------------------------------------------------------
+export const RouteReviewersPolicySchema = z.enum([
+  "codeowners-strict",
+  "blame-weighted",
+  "expertise-graph"
+]);
+export type RouteReviewersPolicy = z.infer<typeof RouteReviewersPolicySchema>;
+
+export const RouteReviewersInputSchema = z.object({
+  proposal: SplitProposalSchema,
+  repo: z.string(),
+  policy: RouteReviewersPolicySchema.optional(),
+  maxReviewersPerSlice: z.number().optional(),
+  excludeUsers: z.array(z.string()).optional(),
+});
+export type RouteReviewersInput = z.infer<typeof RouteReviewersInputSchema>;
+
+export const ReviewerSchema = z.object({
+  login: z.string(),
+  reason: z.string(),
+  weight: z.number().min(0).max(1),
+});
+export type Reviewer = z.infer<typeof ReviewerSchema>;
+
+export const SliceAssignmentSchema = z.object({
+  sliceId: z.string(),
+  reviewers: z.array(ReviewerSchema),
+});
+export type SliceAssignment = z.infer<typeof SliceAssignmentSchema>;
+
+export const RouteReviewersOutputSchema = z.object({
+  schemaVersion: z.literal("1"),
+  assignments: z.array(SliceAssignmentSchema),
+  unassigned: z.array(z.string()),
+});
+export type RouteReviewersOutput = z.infer<typeof RouteReviewersOutputSchema>;

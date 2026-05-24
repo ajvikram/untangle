@@ -12,6 +12,7 @@ import { analyzeDiff } from "./tools/analyze-diff.js";
 import { proposeSplit } from "./tools/propose-split.js";
 import { applySplit } from "./tools/apply-split.js";
 import { summarizeSlice } from "./tools/summarize-slice.js";
+import { routeReviewers } from "./tools/route-reviewers.js";
 import { registerMcpServer } from "./llm/client.js";
 import { logger } from "./util/logger.js";
 
@@ -97,6 +98,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["slice", "graph"],
       },
     },
+    {
+      name: "route_reviewers",
+      description: "Map stacked slices to suggested reviewers using CODEOWNERS and git blame.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          proposal: { type: "object", description: "Split proposal containing slices" },
+          repo: { type: "string", description: "Local path to the git repository" },
+          policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"], description: "Routing policy" },
+          maxReviewersPerSlice: { type: "number", description: "Maximum reviewers suggested per slice" },
+          excludeUsers: { type: "array", items: { type: "string" }, description: "User logins to exclude from suggestions" },
+        },
+        required: ["proposal", "repo"],
+      },
+    },
   ],
 }));
 
@@ -119,6 +135,9 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         break;
       case "summarize_slice":
         result = await summarizeSlice(args as unknown as Parameters<typeof summarizeSlice>[0]);
+        break;
+      case "route_reviewers":
+        result = await routeReviewers(args as unknown as Parameters<typeof routeReviewers>[0]);
         break;
       default:
         return { content: [{ type: "text" as const, text: `Unknown tool: ${name}` }], isError: true };

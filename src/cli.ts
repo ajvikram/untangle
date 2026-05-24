@@ -4,8 +4,10 @@
  */
 
 import { parseArgs } from "node:util";
+import * as fs from "node:fs";
 import { scoreReviewEffort } from "./tools/score-review-effort.js";
 import { analyzeDiff } from "./tools/analyze-diff.js";
+import { routeReviewers } from "./tools/route-reviewers.js";
 import { logger } from "./util/logger.js";
 import type { Target } from "./schemas/types.js";
 
@@ -16,6 +18,7 @@ Usage:
   untangle analyze  [--repo path] [--branch name] [--base main]
   untangle propose  [--graph json-file]
   untangle apply    [--proposal json-file] [--repo path] [--dry-run]
+  untangle route    [--proposal json-file] [--repo path] [--policy name] [--exclude users]
   untangle mcp      (start MCP server — use untangle-mcp instead)
 `;
 
@@ -69,6 +72,31 @@ async function main() {
           base: values.base!,
         };
         const result = await analyzeDiff({ target });
+        console.log(JSON.stringify(result, null, 2));
+        break;
+      }
+      case "route": {
+        const { values } = parseArgs({
+          args: args.slice(1),
+          options: {
+            proposal: { type: "string" },
+            repo: { type: "string", default: "." },
+            policy: { type: "string", default: "blame-weighted" },
+            exclude: { type: "string", default: "" },
+          },
+        });
+        if (!values.proposal) {
+          throw new Error("Missing --proposal JSON file argument");
+        }
+        const proposalContent = fs.readFileSync(values.proposal, "utf8");
+        const proposal = JSON.parse(proposalContent);
+        const excludeUsers = values.exclude ? values.exclude.split(",").map(u => u.trim()) : [];
+        const result = await routeReviewers({
+          proposal,
+          repo: values.repo!,
+          policy: values.policy as any,
+          excludeUsers,
+        });
         console.log(JSON.stringify(result, null, 2));
         break;
       }

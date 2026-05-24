@@ -6,6 +6,7 @@
 export type {
   Target, ConcernKind, HunkRef, Concern, ConcernGraph,
   Slice, SplitProposal, UntangleError,
+  RouteReviewersInput, RouteReviewersOutput, RouteReviewersPolicy, Reviewer, SliceAssignment
 } from "./schemas/types.js";
 export { UntangleErrorImpl } from "./schemas/types.js";
 
@@ -23,6 +24,7 @@ export { analyzeDiff } from "./tools/analyze-diff.js";
 export { proposeSplit } from "./tools/propose-split.js";
 export { applySplit } from "./tools/apply-split.js";
 export { summarizeSlice } from "./tools/summarize-slice.js";
+export { routeReviewers } from "./tools/route-reviewers.js";
 
 // Utilities
 export { sha256, canonicalHash } from "./util/hash.js";
