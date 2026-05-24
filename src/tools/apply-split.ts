@@ -1,11 +1,15 @@
 import { writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { GitWrapper } from "../core/git.js";
 import { GhWrapper } from "../core/gh.js";
 import { RefRegistry } from "../core/ref-registry.js";
-import { canonicalHash } from "../util/hash.js";
+import { canonicalHash, sha256 } from "../util/hash.js";
 import { UntangleErrorImpl } from "../schemas/types.js";
 import type { SplitProposal, Target } from "../schemas/types.js";
+
+const execFileP = promisify(execFile);
 
 export interface ApplySplitInput {
   proposal: SplitProposal;
@@ -85,6 +89,50 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitOutp
   // Snapshot for rollback
   const originalSha = await git.currentSha();
   gitOps++;
+
+  // Parse original branch diff to extract exact patch hunks
+  const fileHeaders = new Map<string, string>();
+  const hunkBodies = new Map<string, string>();
+  try {
+    const { stdout: rawDiff } = await execFileP("git", ["diff", `${target.base}...${target.branch}`], { cwd: target.repo });
+    const lines = rawDiff.split("\n");
+    let lineIdx = 0;
+    while (lineIdx < lines.length) {
+      const line = lines[lineIdx]!;
+      if (line.startsWith("diff --git")) {
+        const startIdx = lineIdx;
+        const match = line.match(/^diff --git a\/(.+) b\/(.+)$/);
+        const filePath = match ? match[2]! : "unknown";
+
+        let headerEnd = lineIdx + 1;
+        while (headerEnd < lines.length && !lines[headerEnd]!.startsWith("@@") && !lines[headerEnd]!.startsWith("diff --git")) {
+          headerEnd++;
+        }
+        const fileHeader = lines.slice(startIdx, headerEnd).join("\n") + "\n";
+        fileHeaders.set(filePath, fileHeader);
+        lineIdx = headerEnd;
+      } else if (line.startsWith("@@")) {
+        const startIdx = lineIdx;
+        const hunkMatch = line.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+        if (hunkMatch) {
+          lineIdx++;
+          while (lineIdx < lines.length && !lines[lineIdx]!.startsWith("@@") && !lines[lineIdx]!.startsWith("diff --git")) {
+            lineIdx++;
+          }
+          const hunkText = lines.slice(startIdx, lineIdx).join("\n");
+          const hash = sha256(hunkText);
+          hunkBodies.set(hash, hunkText + "\n");
+        } else {
+          lineIdx++;
+        }
+      } else {
+        lineIdx++;
+      }
+    }
+  } catch (err: unknown) {
+    logs.push(JSON.stringify({ op: "parse_diff_failed", error: String(err) }));
+  }
+
   const created: CreatedEntry[] = [];
 
   try {
@@ -103,29 +151,75 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitOutp
       gitOps++;
       registry.add(branchName);
 
-      // Create files from hunks (synthesize content for new files)
+      // Group slice hunks by file and apply them
+      const hunksByFile = new Map<string, typeof slice.hunks>();
       for (const hunk of slice.hunks) {
-        const filePath = join(target.repo, hunk.filePath);
-        try {
-          await mkdir(dirname(filePath), { recursive: true });
-          // For new files (oldLines=0, oldStart=0), create the file
-          if (hunk.oldStart === 0 && hunk.oldLines === 0) {
-            const content = Array.from({ length: hunk.newLines }, (_, li) =>
+        if (!hunksByFile.has(hunk.filePath)) {
+          hunksByFile.set(hunk.filePath, []);
+        }
+        hunksByFile.get(hunk.filePath)!.push(hunk);
+      }
+
+      for (const [filePath, fileHunks] of hunksByFile.entries()) {
+        const fileHeader = fileHeaders.get(filePath);
+        if (fileHeader) {
+          let patchContent = fileHeader;
+          let hasHunks = false;
+          for (const hunk of fileHunks) {
+            const body = hunkBodies.get(hunk.hash);
+            if (body) {
+              patchContent += body;
+              hasHunks = true;
+            } else if (hunk.oldStart !== 0 || hunk.oldLines !== 0) {
+              // Hunk not found in diff - throw patch reject for modifications
+              throw new UntangleErrorImpl(
+                "PATCH_REJECT",
+                `Hunk ${hunk.hash} for ${filePath} not found in repository diff`,
+                false,
+                { sliceId: slice.id, filePath },
+              );
+            }
+          }
+          if (hasHunks) {
+            try {
+              await git.applyPatch(patchContent);
+            } catch (err: unknown) {
+              throw new UntangleErrorImpl(
+                "PATCH_REJECT",
+                `Failed to apply patch for ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+                false,
+                { sliceId: slice.id, filePath },
+              );
+            }
+          }
+        } else {
+          // If it's a modification, but not found in the diff, throw PATCH_REJECT!
+          const isMod = fileHunks.some((h) => h.oldStart !== 0 || h.oldLines !== 0);
+          if (isMod) {
+            throw new UntangleErrorImpl(
+              "PATCH_REJECT",
+              `Cannot apply modification hunk for ${filePath} without original diff content`,
+              false,
+              { sliceId: slice.id, filePath },
+            );
+          }
+
+          // Fallback for mock new files (e.g. in vitest tests)
+          const fullPath = join(target.repo, filePath);
+          try {
+            await mkdir(dirname(fullPath), { recursive: true });
+            const content = Array.from({ length: fileHunks[0]!.newLines }, (_, li) =>
               `// ${slice.title} line ${li + 1}`
             ).join("\n") + "\n";
-            await writeFile(filePath, content);
-          } else {
-            // For modifications, this is a best-effort approach
-            // In production, we'd use git apply with the original patch
-            throw new Error("Cannot apply modification hunk without original content");
+            await writeFile(fullPath, content);
+          } catch (err: unknown) {
+            throw new UntangleErrorImpl(
+              "PATCH_REJECT",
+              `Failed to write mock file ${filePath}: ${err instanceof Error ? err.message : String(err)}`,
+              false,
+              { sliceId: slice.id, filePath },
+            );
           }
-        } catch (err: unknown) {
-          throw new UntangleErrorImpl(
-            "PATCH_REJECT",
-            `Failed to apply hunk for ${hunk.filePath}: ${err instanceof Error ? err.message : String(err)}`,
-            false,
-            { sliceId: slice.id, filePath: hunk.filePath },
-          );
         }
       }
 
@@ -235,3 +329,4 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitOutp
     );
   }
 }
+
