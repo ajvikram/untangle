@@ -10,16 +10,17 @@ Median PR review time is up 441% in 2026 because AI coding agents produce diffs 
 
 ## What it does
 
-Six MCP tools that decompose, score, route, and apply PR splits:
+Six core MCP tools and one unified orchestrator tool that decompose, score, route, and apply PR splits:
 
 | Tool | Purpose |
 |---|---|
-| `analyze_diff` | Parse diff into a concern graph |
 | `score_review_effort` | Circuit-Breaker pre-check — skip trivial PRs |
+| `analyze_diff` | Parse diff into a concern graph |
 | `propose_split` | Generate an ordered stack proposal |
 | `apply_split` | Materialize stacked commits/PRs (atomic, reversible) |
 | `summarize_slice` | Generate PR body for each slice |
 | `route_reviewers` *(v2)* | CODEOWNERS + blame routing |
+| `decompose` *(v2)* | Unified orchestrator (runs all tools end-to-end) |
 
 See [`specs/`](./specs/) for the contract.
 
@@ -30,9 +31,9 @@ npm install
 npm run build
 ```
 
-## Use with Claude Desktop / Claude Code
+## Register MCP Server
 
-To run the compiled server directly:
+To use this server with your AI agent (Claude Code, Cursor, Antigravity, etc.), add it to your client's configuration file (e.g., `~/.config/Claude/claude_desktop_config.json` or `~/.gemini/antigravity/mcp_config.json`):
 
 ```json
 {
@@ -44,6 +45,36 @@ To run the compiled server directly:
   }
 }
 ```
+
+---
+
+## How to Use
+
+### 1. In Your AI Agent Chat (Natural Language Prompts)
+
+Once registered, you do not need to run manual Git commands. You can simply prompt the agent in your chat window:
+
+*   **To inspect how the tool plans to divide your work (Dry Run):**
+    > *"Analyze my current branch changes using untangle and show me the split proposal."*
+*   **To automatically stack commits, push branches, and create draft PRs:**
+    > *"Decompose this branch with untangle and create the draft PRs."*
+*   **To route reviewer recommendations:**
+    > *"Recommend reviewers for the proposed slices of my branch changes."*
+
+### 2. In Your Terminal (CLI)
+
+You can also run `untangle` directly from your shell:
+
+*   **Dry Run (inspect the plan):**
+    ```bash
+    node dist/cli.js decompose --repo . --dry-run
+    ```
+*   **Apply (stack commits, push branches, open draft PRs, assign reviewers):**
+    ```bash
+    node dist/cli.js decompose --repo .
+    ```
+
+---
 
 ## Design principles
 
@@ -66,3 +97,4 @@ Built on research from:
 ## License
 
 MIT
+

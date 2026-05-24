@@ -1,6 +1,6 @@
 {
   "name": "untangle",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "MCP-native PR decomposer for AI-generated diffs. Splits tangled commits into reviewable stacked PRs.",
   "license": "MIT",
   "type": "module",
