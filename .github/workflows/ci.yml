@@ -58,12 +58,12 @@ jobs:
 
       - name: Create release bundle
         run: |
-          tar -czf untangle-v${{ github.ref_name }}.tar.gz dist package.json README.md LICENSE
+          tar -czf untangle-${{ github.ref_name }}.tar.gz dist package.json README.md LICENSE
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: untangle-v${{ github.ref_name }}.tar.gz
+          files: untangle-${{ github.ref_name }}.tar.gz
           draft: false
           prerelease: false
           generate_release_notes: true
