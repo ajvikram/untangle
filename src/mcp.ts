@@ -12,6 +12,8 @@ import { analyzeDiff } from "./tools/analyze-diff.js";
 import { proposeSplit } from "./tools/propose-split.js";
 import { applySplit } from "./tools/apply-split.js";
 import { summarizeSlice } from "./tools/summarize-slice.js";
+import { routeReviewers } from "./tools/route-reviewers.js";
+import { decompose } from "./tools/decompose.js";
 import { registerMcpServer } from "./llm/client.js";
 import { logger } from "./util/logger.js";
 
@@ -97,6 +99,37 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["slice", "graph"],
       },
     },
+    {
+      name: "route_reviewers",
+      description: "Map stacked slices to suggested reviewers using CODEOWNERS and git blame.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          proposal: { type: "object", description: "Split proposal containing slices" },
+          repo: { type: "string", description: "Local path to the git repository" },
+          policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"], description: "Routing policy" },
+          maxReviewersPerSlice: { type: "number", description: "Maximum reviewers suggested per slice" },
+          excludeUsers: { type: "array", items: { type: "string" }, description: "User logins to exclude from suggestions" },
+        },
+        required: ["proposal", "repo"],
+      },
+    },
+    {
+      name: "decompose",
+      description: "Decompose changes end-to-end: analyze, propose slices, find reviewers, and materialize stacked branches/PRs.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          target: { type: "object", description: "Target branch details (repo, branch, base)" },
+          dryRun: { type: "boolean", description: "Simulate and create branches locally only, do not push to remote or create PRs" },
+          draftPRs: { type: "boolean", description: "Create pull requests as draft (default: true)" },
+          pushRemote: { type: "string", description: "Git remote name (default: origin)" },
+          policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"], description: "Reviewer assignment routing policy" },
+          excludeUsers: { type: "array", items: { type: "string" }, description: "Exclude specific reviewer usernames" },
+        },
+        required: ["target"],
+      },
+    },
   ],
 }));
 
@@ -119,6 +152,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         break;
       case "summarize_slice":
         result = await summarizeSlice(args as unknown as Parameters<typeof summarizeSlice>[0]);
+        break;
+      case "route_reviewers":
+        result = await routeReviewers(args as unknown as Parameters<typeof routeReviewers>[0]);
+        break;
+      case "decompose":
+        result = await decompose(args as unknown as Parameters<typeof decompose>[0]);
         break;
       default:
         return { content: [{ type: "text" as const, text: `Unknown tool: ${name}` }], isError: true };
