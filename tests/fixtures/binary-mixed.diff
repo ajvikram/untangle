@@ -1,0 +1,9 @@
+diff --git a/src/app.ts b/src/app.ts
+index aaa..bbb 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,3 +1,3 @@
+-export const version = '1.0.0';
++export const version = '1.0.1';
+diff --git a/assets/logo.png b/assets/logo.png
+Binary files a/assets/logo.png and b/assets/logo.png differ

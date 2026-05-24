@@ -1,0 +1,14 @@
+diff --git a/src/auth/login.ts b/src/auth/login.ts
+index aaa..bbb 100644
+--- a/src/auth/login.ts
++++ b/src/auth/login.ts
+@@ -10,6 +10,10 @@ export async function login(username: string, password: string) {
+   const user = await db.findUser(username);
+   if (!user) throw new AuthError('USER_NOT_FOUND');
+   
++  // Rate limit check
++  const attempts = await db.getLoginAttempts(username);
++  if (attempts > 5) throw new AuthError('RATE_LIMITED');
++  
+   const valid = await bcrypt.compare(password, user.passwordHash);
+   if (!valid) throw new AuthError('INVALID_PASSWORD');
