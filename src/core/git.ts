@@ -57,6 +57,147 @@ export class GitWrapper {
     return this.git(["diff", "HEAD"]);
   }
 
+  /** Get staged (index vs HEAD) diff. */
+  async diffStaged(): Promise<string> {
+    return this.git(["diff", "--cached"]);
+  }
+
+  /** Get unstaged (working tree vs index) diff. */
+  async diffUnstaged(): Promise<string> {
+    return this.git(["diff"]);
+  }
+
+  /** Diff a specific path(s) — combines with mode for cached/working/HEAD selection. */
+  async diffPaths(paths: string[], mode: "working" | "staged" | "head" = "working"): Promise<string> {
+    const args = ["diff"];
+    if (mode === "staged") args.push("--cached");
+    else if (mode === "head") args.push("HEAD");
+    if (paths.length > 0) args.push("--", ...paths);
+    return this.git(args);
+  }
+
+  /** Current branch name (empty string if detached HEAD). */
+  async currentBranch(): Promise<string> {
+    try {
+      return await this.git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    } catch {
+      return "";
+    }
+  }
+
+  /** Working-tree status as a structured object. */
+  async status(): Promise<{
+    branch: string;
+    ahead: number;
+    behind: number;
+    staged: string[];
+    modified: string[];
+    untracked: string[];
+    conflicted: string[];
+    clean: boolean;
+  }> {
+    const raw = await this.git(["status", "--porcelain=v2", "--branch"]);
+    const lines = raw.split("\n");
+    let branch = "";
+    let ahead = 0;
+    let behind = 0;
+    const staged: string[] = [];
+    const modified: string[] = [];
+    const untracked: string[] = [];
+    const conflicted: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith("# branch.head")) {
+        branch = line.substring("# branch.head ".length).trim();
+      } else if (line.startsWith("# branch.ab")) {
+        const m = line.match(/\+(\d+)\s+-(\d+)/);
+        if (m) {
+          ahead = parseInt(m[1]!, 10);
+          behind = parseInt(m[2]!, 10);
+        }
+      } else if (line.startsWith("? ")) {
+        untracked.push(line.substring(2).trim());
+      } else if (line.startsWith("u ")) {
+        // unmerged: "u <xy> ... <path>"
+        const parts = line.split(" ");
+        const p = parts[parts.length - 1];
+        if (p) conflicted.push(p);
+      } else if (line.startsWith("1 ") || line.startsWith("2 ")) {
+        // changed entry: "1 XY ... <path>" or "2 XY ... <orig> <path>"
+        const parts = line.split(" ");
+        const xy = parts[1] ?? "..";
+        const x = xy[0];
+        const y = xy[1];
+        const p = parts[parts.length - 1];
+        if (!p) continue;
+        if (x && x !== "." && x !== "?") staged.push(p);
+        if (y && y !== "." && y !== "?") modified.push(p);
+      }
+    }
+    return {
+      branch,
+      ahead,
+      behind,
+      staged,
+      modified,
+      untracked,
+      conflicted,
+      clean: staged.length === 0 && modified.length === 0 && untracked.length === 0 && conflicted.length === 0,
+    };
+  }
+
+  /** Get commit log entries. */
+  async log(opts: {
+    maxCount?: number;
+    range?: string;
+    paths?: string[];
+    includeStat?: boolean;
+  } = {}): Promise<Array<{
+    sha: string;
+    author: string;
+    email: string;
+    date: string;
+    subject: string;
+    body?: string;
+  }>> {
+    const fmt = ["%H", "%an", "%ae", "%aI", "%s", "%b"].join("%x1f");
+    const args = ["log", `--max-count=${opts.maxCount ?? 20}`, `--pretty=format:${fmt}%x1e`];
+    if (opts.range) args.push(opts.range);
+    if (opts.paths && opts.paths.length > 0) args.push("--", ...opts.paths);
+    const raw = await this.git(args);
+    if (!raw) return [];
+    return raw
+      .split("\x1e")
+      .map((rec) => rec.trim())
+      .filter((rec) => rec.length > 0)
+      .map((rec) => {
+        const [sha, author, email, date, subject, body] = rec.split("\x1f");
+        return {
+          sha: sha ?? "",
+          author: author ?? "",
+          email: email ?? "",
+          date: date ?? "",
+          subject: subject ?? "",
+          body: body ? body : undefined,
+        };
+      });
+  }
+
+  /** Show a commit (or other ref) with optional diff/stat. */
+  async show(ref: string, opts: { stat?: boolean; nameOnly?: boolean; format?: "full" | "patch" } = {}): Promise<string> {
+    const args = ["show"];
+    if (opts.nameOnly) args.push("--name-only");
+    else if (opts.stat) args.push("--stat");
+    if (opts.format === "patch") args.push("--patch");
+    args.push(ref);
+    return this.git(args);
+  }
+
+  /** Stage specific paths (use addAll for everything). */
+  async addPaths(paths: string[]): Promise<void> {
+    if (paths.length === 0) return;
+    await this.git(["add", "--", ...paths]);
+  }
+
   /** Create and checkout a new branch from a base. */
   async checkoutNewBranch(name: string, from: string): Promise<void> {
     await this.git(["checkout", "-B", name, from]);
@@ -138,6 +279,31 @@ export class GitWrapper {
         .split("\n")
         .map((b) => b.replace(/^\*?\s+/, "").trim())
         .filter((b) => b.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  /** List all branches (optionally including remote-tracking refs). */
+  async listAllBranches(opts: { remote?: boolean } = {}): Promise<Array<{ name: string; current: boolean; remote: boolean }>> {
+    const args = ["branch", "--list"];
+    if (opts.remote) args.push("--all");
+    try {
+      const output = await this.git(args);
+      return output
+        .split("\n")
+        .map((line) => {
+          const current = line.startsWith("*");
+          const cleaned = line.replace(/^\*?\s+/, "").trim();
+          if (!cleaned || cleaned.startsWith("(HEAD detached")) return null;
+          const isRemote = cleaned.startsWith("remotes/");
+          return {
+            name: isRemote ? cleaned.replace(/^remotes\//, "") : cleaned,
+            current,
+            remote: isRemote,
+          };
+        })
+        .filter((b): b is { name: string; current: boolean; remote: boolean } => b !== null);
     } catch {
       return [];
     }
