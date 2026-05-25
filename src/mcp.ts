@@ -89,7 +89,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "apply_split",
-      description: "Materialize a SplitProposal as git commits and branches (atomic, reversible).",
+      description: "Materialize a SplitProposal as git commits and branches (atomic, reversible). REQUIRES target.kind:'branch' with a clean working tree — if you have uncommitted changes use `decompose` instead, or commit first then call this.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -133,7 +133,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "decompose",
-      description: "Decompose changes end-to-end: analyze, propose slices, find reviewers, and materialize stacked branches/PRs.",
+      description: "PREFERRED entry point. Decompose changes end-to-end: analyze, propose slices, find reviewers, materialize stacked branches/PRs. Pass target: { kind:'branch', repo, branch, base } against a committed feature branch (clean tree). Use this instead of calling analyze_diff/propose_split/apply_split individually.",
       inputSchema: {
         type: "object" as const,
         properties: {
