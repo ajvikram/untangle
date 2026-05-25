@@ -54,6 +54,14 @@ describe("UI server: auth", () => {
     expect(res.status).toBe(401);
   });
 
+  it("serves static assets WITHOUT a token (build output is public)", async () => {
+    // The SPA's <script src="/assets/..."> can't carry a Bearer header — assets
+    // must be public so the page actually renders. Token only gates /api/*.
+    // Unknown asset paths return 404, not 401.
+    const res = await fetch(`${base}/assets/does-not-exist.js`);
+    expect(res.status).not.toBe(401);
+  });
+
   it("accepts Bearer token", async () => {
     const res = await get("/api/session");
     expect(res.status).toBe(200);

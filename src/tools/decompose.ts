@@ -7,6 +7,7 @@ import { analyzeDiff } from "./analyze-diff.js";
 import { proposeSplit } from "./propose-split.js";
 import { routeReviewers } from "./route-reviewers.js";
 import { applySplit } from "./apply-split.js";
+import { normalizeTarget } from "../schemas/types.js";
 import type { Target } from "../schemas/types.js";
 
 export interface DecomposeInput {
@@ -36,7 +37,6 @@ export interface DecomposeOutput {
 
 export async function decompose(input: DecomposeInput): Promise<DecomposeOutput> {
   const {
-    target,
     dryRun = true,
     draftPRs = true,
     pushRemote = "origin",
@@ -44,6 +44,7 @@ export async function decompose(input: DecomposeInput): Promise<DecomposeOutput>
     excludeUsers = [],
     branchPrefix = "untangle/",
   } = input;
+  const target = normalizeTarget(input.target);
 
   // 1. Analyze the diff
   const analysis = await analyzeDiff({ target });
@@ -52,7 +53,10 @@ export async function decompose(input: DecomposeInput): Promise<DecomposeOutput>
   const { proposal } = await proposeSplit({ graph: analysis.graph });
 
   // 3. Resolve repo path for routing
-  const repo = (target.kind === "branch" || target.kind === "pr") ? target.repo : ".";
+  const repo =
+    target.kind === "branch" || target.kind === "pr" || target.kind === "working"
+      ? target.repo
+      : ".";
 
   // 4. route reviewers for the proposal slices
   const routing = await routeReviewers({

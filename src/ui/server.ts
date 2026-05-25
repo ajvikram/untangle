@@ -116,13 +116,15 @@ export async function startUiServer(opts: { logUrl?: boolean } = {}): Promise<Ui
       const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
       const pathname = url.pathname;
 
-      // Public endpoints (no token): /healthz only
+      // Public endpoints (no token): /healthz
       if (pathname === "/healthz") {
         return sendJson(res, 200, { ok: true, sessionId: store.sessionId, startedAt: store.startedAt });
       }
 
-      // All other endpoints require the token
-      if (!checkToken(req, token, url)) {
+      // Static assets and SPA shell are public — they're build output, not user data.
+      // The token gates /api/* (and SSE) where all session data flows.
+      const isApi = pathname.startsWith("/api/");
+      if (isApi && !checkToken(req, token, url)) {
         return sendError(res, 401, "Missing or invalid session token");
       }
 

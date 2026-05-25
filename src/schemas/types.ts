@@ -44,8 +44,86 @@ export const TargetSchema = z.discriminatedUnion("kind", [
     repo: z.string(),
     number: z.number(),
   }),
+  z.object({
+    kind: z.literal("working"),
+    repo: z.string(),
+    mode: z.enum(["working", "staged", "head"]).optional(),
+  }),
 ]);
 export type Target = z.infer<typeof TargetSchema>;
+
+/**
+ * Forgive callers who omit `kind` or use convenience field names.
+ * Returns a properly-discriminated Target or throws an UntangleError describing
+ * exactly what shape was expected.
+ *
+ * Accepted shapes:
+ *   - { kind: 'branch'|'diff'|'pr'|'working', ... }
+ *   - { repo, base, branch }           → kind:'branch'
+ *   - { repo, base, head }             → kind:'branch'  (head aliased to branch)
+ *   - { repo, number }                 → kind:'pr'
+ *   - { content }                      → kind:'diff'
+ *   - { repo, mode:'working'|'staged'|'head' } → kind:'working'
+ *   - { repo } alone                   → kind:'working' with mode:'head' (current uncommitted changes)
+ */
+export function normalizeTarget(raw: unknown): Target {
+  if (raw === null || typeof raw !== "object") {
+    throw new UntangleErrorImpl(
+      "BAD_INPUT",
+      "target must be an object with `kind`: 'branch' | 'diff' | 'pr' | 'working'",
+      false,
+      { received: raw },
+    );
+  }
+  const t = raw as Record<string, unknown>;
+
+  // Explicit kind.
+  if (typeof t.kind === "string") {
+    if (t.kind === "branch" && typeof t.branch !== "string" && typeof t.head === "string") {
+      return { ...t, branch: t.head as string } as unknown as Target;
+    }
+    // Accept type=working as alias for kind=working too
+    return t as unknown as Target;
+  }
+  // Some callers use `type` instead of `kind`.
+  if (typeof t.type === "string") {
+    return normalizeTarget({ ...t, kind: t.type });
+  }
+
+  // Infer from shape.
+  if (typeof t.content === "string") {
+    return { kind: "diff", content: t.content, baseRef: typeof t.baseRef === "string" ? t.baseRef : undefined };
+  }
+  if (typeof t.repo === "string" && typeof t.number === "number") {
+    return { kind: "pr", repo: t.repo, number: t.number };
+  }
+  if (typeof t.repo === "string" && typeof t.base === "string") {
+    const branch = typeof t.branch === "string" ? t.branch : typeof t.head === "string" ? t.head : undefined;
+    if (branch) {
+      return { kind: "branch", repo: t.repo, branch, base: t.base };
+    }
+  }
+  if (typeof t.repo === "string") {
+    // Working-tree shape: { repo } or { repo, mode }
+    const m = typeof t.mode === "string" && ["working", "staged", "head"].includes(t.mode)
+      ? (t.mode as "working" | "staged" | "head")
+      : "head";
+    return { kind: "working", repo: t.repo, mode: m };
+  }
+
+  throw new UntangleErrorImpl(
+    "BAD_INPUT",
+    "target shape unrecognized — expected one of: " +
+      "{ kind:'branch', repo, branch, base } · " +
+      "{ kind:'diff', content } · " +
+      "{ kind:'pr', repo, number } · " +
+      "{ kind:'working', repo, mode? }. " +
+      "Shortcuts: { repo, base, branch } or { repo, base, head } → branch; " +
+      "{ repo, mode } or just { repo } → working tree.",
+    false,
+    { received: t },
+  );
+}
 
 // ---------------------------------------------------------------------------
 // HunkRef

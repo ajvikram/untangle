@@ -10,7 +10,7 @@ import { buildConcernGraph, stableConcernId } from "../core/concern-graph.js";
 import { getLlmClient } from "../llm/client.js";
 import { formatHunksForClassification } from "../llm/prompts.js";
 import { logger } from "../util/logger.js";
-import { UntangleErrorImpl } from "../schemas/types.js";
+import { UntangleErrorImpl, normalizeTarget } from "../schemas/types.js";
 import type { Target, Concern, ConcernGraph, HunkRef, ConcernKind } from "../schemas/types.js";
 
 const execFileP = promisify(execFile);
@@ -62,7 +62,20 @@ async function resolveDiff(target: Target): Promise<{ raw: string; commitMessage
     } catch { /* ignore */ }
     return { raw: stdout, commitMessages };
   }
-  throw new UntangleErrorImpl("NOT_IMPLEMENTED", "PR target not yet supported", false);
+  if (target.kind === "working") {
+    const cwd = target.repo;
+    const mode = target.mode ?? "head";
+    const args = mode === "staged" ? ["diff", "--cached"]
+              : mode === "working" ? ["diff"]
+              : ["diff", "HEAD"];
+    const { stdout } = await execFileP("git", args, { cwd });
+    return { raw: stdout };
+  }
+  throw new UntangleErrorImpl(
+    "NOT_IMPLEMENTED",
+    "PR target not yet supported — for an existing GitHub PR, fetch its diff via `pr_diff` and pass it as `{ kind: 'diff', content: <diff> }`.",
+    false,
+  );
 }
 
 /** Detect languages from file extensions in the diff. */
@@ -84,7 +97,8 @@ export async function analyzeDiff(input: AnalyzeDiffInput): Promise<AnalyzeDiffO
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
-  const { raw, commitMessages } = await resolveDiff(input.target);
+  const target = normalizeTarget(input.target);
+  const { raw, commitMessages } = await resolveDiff(target);
 
   // Empty diff fast path
   if (!raw || raw.trim().length === 0) {
