@@ -70,7 +70,15 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitOutp
   }
 
   if (target.kind !== "branch") {
-    throw new UntangleErrorImpl("NOT_IMPLEMENTED", "apply_split only supports branch targets", false);
+    const msg =
+      target.kind === "working"
+        ? "apply_split can't materialize uncommitted (working-tree) changes — the slices reference hunks that don't exist in any branch yet. Commit your changes first (use git_commit) and re-call with target: { kind:'branch', repo, branch: <your-branch>, base: <base-branch> }."
+        : target.kind === "diff"
+          ? "apply_split needs to write commits and branches; kind:'diff' has no repo to target. Use kind:'branch' against a real repo path."
+          : target.kind === "pr"
+            ? "apply_split against an existing PR is not supported. To re-stack an existing PR, check it out locally as a branch and call with kind:'branch'."
+            : `apply_split requires target.kind:'branch'; got '${(target as { kind: string }).kind}'.`;
+    throw new UntangleErrorImpl("BAD_INPUT", msg, false);
   }
 
   const git = new GitWrapper(target.repo);

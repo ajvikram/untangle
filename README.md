@@ -10,17 +10,44 @@ Median PR review time is up 441% in 2026 because AI coding agents produce diffs 
 
 ## What it does
 
-Six core MCP tools and one unified orchestrator tool that decompose, score, route, and apply PR splits:
+Three surfaces, one process:
 
-| Tool | Name | Description |
-|---|---|---|
-| `score_review_effort` | Circuit Breaker | Predicts review effort from static signals and decides if decomposition is needed. |
-| `analyze_diff` | Diff Parser | Parses a unified diff into a ConcernGraph (DAG of semantic concerns). |
-| `propose_split` | Split Planner | Plans a dependency-aware stack of slices from a ConcernGraph. |
-| `apply_split` | Code Materializer | Commits, branches, and pushes stacked slices, creating draft PRs. |
-| `summarize_slice` | PR Describer | Generates reviewer-ready PR titles and bodies for each slice. |
-| `route_reviewers` | Review Router | Maps stacked slices to suggested reviewers using git blame and `CODEOWNERS`. |
-| `decompose` | Unified Orchestrator | Executes all of the above tools end-to-end dynamically. |
+1. **Decomposition tools** — analyze a tangled diff into concerns, propose a stacked split, materialize it as branches + draft PRs.
+2. **Rich git + GitHub PR operations** — drive the full review → approve → merge lifecycle from MCP (no need to shell out to `git` or `gh` separately).
+3. **Embedded web dashboard** — a local-only React UI served on a 127.0.0.1 ephemeral port that visualizes the concern graph, slice stack, PRs, checks, and git state, with action buttons for approve / request-changes / merge / commit / push.
+
+### MCP tools
+
+| Category | Tools |
+|---|---|
+| Decomposition | `score_review_effort`, `analyze_diff`, `propose_split`, `apply_split`, `summarize_slice`, `route_reviewers`, `decompose` |
+| Git introspection | `git_status`, `git_diff`, `git_log`, `git_show`, `git_branch` |
+| Git mutations | `git_commit`, `git_push`, `git_checkout` |
+| PR introspection | `pr_list`, `pr_view`, `pr_diff`, `pr_checks` |
+| PR review / approval | `pr_review`, `pr_comment`, `pr_review_dismiss`, `pr_request_reviewers` |
+| PR lifecycle | `pr_merge`, `pr_ready`, `pr_close`, `pr_reopen` |
+| UI | `ui_open` |
+
+All mutation tools support `dryRun` and refuse destructive ops on protected refs (`main`, `master`, `develop`, `production`, `release`) without explicit override.
+
+### Web dashboard
+
+When the MCP server starts it also spins up a local HTTP server on a random ephemeral port (127.0.0.1 only, per-session token). The URL is printed to stderr:
+
+```
+[untangle-ui] http://127.0.0.1:54213/?t=…
+```
+
+The agent can also call the `ui_open` tool to retrieve the URL and drop it into chat — open it in VS Code's Simple Browser (`Cmd+Shift+P → Simple Browser: Show`) for a side-by-side view next to your conversation.
+
+The dashboard has four tabs:
+
+- **Decompose** — interactive concern-graph (reactflow DAG) with slices laid out as columns; one-click dry-run apply or full stacked-PR apply.
+- **PRs** — list / view / diff / checks; approve, request-changes, comment, merge (with method picker), close, reopen, mark-ready. Protected bases trigger a confirm modal.
+- **Git** — structured status, branches, commit log, working/staged/HEAD diff, commit/push/checkout. Push to a protected branch triggers a confirm.
+- **Activity** — SSE-driven live feed of everything the MCP server has done in this session.
+
+Set `UNTANGLE_UI=0` to disable the embedded UI server entirely (the stdio MCP transport keeps working).
 
 See [`specs/`](./specs/) for the contract.
 

@@ -1,24 +1,38 @@
 #!/usr/bin/env node
 /**
  * MCP server entry point for untangle.
- * Exposes 5 tools via the Model Context Protocol.
+ * Exposes decomposition tools plus a rich git + GitHub PR operations surface.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { scoreReviewEffort } from "./tools/score-review-effort.js";
-import { analyzeDiff } from "./tools/analyze-diff.js";
-import { proposeSplit } from "./tools/propose-split.js";
-import { applySplit } from "./tools/apply-split.js";
-import { summarizeSlice } from "./tools/summarize-slice.js";
-import { routeReviewers } from "./tools/route-reviewers.js";
-import { decompose } from "./tools/decompose.js";
+import {
+  instrumentedScoreReviewEffort as scoreReviewEffort,
+  instrumentedAnalyzeDiff as analyzeDiff,
+  instrumentedProposeSplit as proposeSplit,
+  instrumentedApplySplit as applySplit,
+  instrumentedSummarizeSlice as summarizeSlice,
+  instrumentedRouteReviewers as routeReviewers,
+  instrumentedDecompose as decompose,
+} from "./ui/instrument.js";
+import {
+  gitStatus, gitDiff, gitLog, gitShow, gitBranch,
+  gitCommit, gitPush, gitCheckout,
+} from "./tools/git-ops.js";
+import {
+  prList, prView, prDiff, prChecks,
+  prReview, prComment, prReviewDismiss, prRequestReviewers,
+  prMerge, prReady, prClose, prReopen,
+} from "./tools/pr-ops.js";
+import { startUiServer } from "./ui/server.js";
+import { uiOpen, registerUiServer } from "./tools/ui-open.js";
 import { registerMcpServer } from "./llm/client.js";
+import { registerServerForWorkspace, discoverWorkspaceRoot } from "./util/workspace.js";
 import { logger } from "./util/logger.js";
 
 const server = new Server(
-  { name: "untangle", version: "0.1.0" },
+  { name: "untangle", version: "0.2.0" },
   { capabilities: { tools: {} } },
 );
 
@@ -26,6 +40,9 @@ registerMcpServer(server);
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
+    // -----------------------------------------------------------------------
+    // Decomposition tools
+    // -----------------------------------------------------------------------
     {
       name: "score_review_effort",
       description: "Circuit Breaker — predict review effort from static signals. Returns shouldDecompose.",
@@ -72,7 +89,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "apply_split",
-      description: "Materialize a SplitProposal as git commits and branches (atomic, reversible).",
+      description: "Materialize a SplitProposal as git commits and branches (atomic, reversible). REQUIRES target.kind:'branch' with a clean working tree — if you have uncommitted changes use `decompose` instead, or commit first then call this.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -107,27 +124,327 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           proposal: { type: "object", description: "Split proposal containing slices" },
           repo: { type: "string", description: "Local path to the git repository" },
-          policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"], description: "Routing policy" },
-          maxReviewersPerSlice: { type: "number", description: "Maximum reviewers suggested per slice" },
-          excludeUsers: { type: "array", items: { type: "string" }, description: "User logins to exclude from suggestions" },
+          policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"] },
+          maxReviewersPerSlice: { type: "number" },
+          excludeUsers: { type: "array", items: { type: "string" } },
         },
         required: ["proposal", "repo"],
       },
     },
     {
       name: "decompose",
-      description: "Decompose changes end-to-end: analyze, propose slices, find reviewers, and materialize stacked branches/PRs.",
+      description: "PREFERRED entry point. Decompose changes end-to-end: analyze, propose slices, find reviewers, materialize stacked branches/PRs. Pass target: { kind:'branch', repo, branch, base } against a committed feature branch (clean tree). Use this instead of calling analyze_diff/propose_split/apply_split individually.",
       inputSchema: {
         type: "object" as const,
         properties: {
-          target: { type: "object", description: "Target branch details (repo, branch, base)" },
-          dryRun: { type: "boolean", description: "Simulate and create branches locally only, do not push to remote or create PRs" },
-          draftPRs: { type: "boolean", description: "Create pull requests as draft (default: true)" },
-          pushRemote: { type: "string", description: "Git remote name (default: origin)" },
-          policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"], description: "Reviewer assignment routing policy" },
-          excludeUsers: { type: "array", items: { type: "string" }, description: "Exclude specific reviewer usernames" },
+          target: { type: "object" },
+          dryRun: { type: "boolean" },
+          draftPRs: { type: "boolean" },
+          pushRemote: { type: "string" },
+          policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"] },
+          excludeUsers: { type: "array", items: { type: "string" } },
         },
         required: ["target"],
+      },
+    },
+    {
+      name: "ui_open",
+      description: "Return the local URL of the embedded untangle dashboard (concern graph + PR/git actions). Pass `path` to deep-link, e.g. /proposals/abc.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          path: { type: "string", description: "Optional in-app path to deep-link to" },
+        },
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // Git introspection
+    // -----------------------------------------------------------------------
+    {
+      name: "git_status",
+      description: "Get structured working-tree status (branch, ahead/behind, staged/modified/untracked).",
+      inputSchema: {
+        type: "object" as const,
+        properties: { repo: { type: "string", description: "Path to repo (default: '.')" } },
+      },
+    },
+    {
+      name: "git_diff",
+      description: "Get a git diff. Modes: working (unstaged), staged, head (working+staged vs HEAD), range (base...head).",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          mode: { type: "string", enum: ["working", "staged", "head", "range"] },
+          base: { type: "string", description: "For mode=range" },
+          head: { type: "string", description: "For mode=range" },
+          paths: { type: "array", items: { type: "string" }, description: "Limit diff to specific paths" },
+        },
+      },
+    },
+    {
+      name: "git_log",
+      description: "Get commit history. Returns an array of {sha, author, email, date, subject, body}.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          maxCount: { type: "number", description: "Default 20" },
+          range: { type: "string", description: "e.g. 'main..HEAD' or a ref" },
+          paths: { type: "array", items: { type: "string" } },
+        },
+      },
+    },
+    {
+      name: "git_show",
+      description: "Show a commit / ref. Optionally just stat or name-only.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          ref: { type: "string" },
+          stat: { type: "boolean" },
+          nameOnly: { type: "boolean" },
+          format: { type: "string", enum: ["full", "patch"] },
+        },
+        required: ["ref"],
+      },
+    },
+    {
+      name: "git_branch",
+      description: "List branches and current branch. Set includeRemote:true to include remote-tracking refs.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          includeRemote: { type: "boolean" },
+        },
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // Git mutations
+    // -----------------------------------------------------------------------
+    {
+      name: "git_commit",
+      description: "Create a commit. Optionally stage paths first (paths) or stage everything (addAll). Supports dryRun.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          message: { type: "string" },
+          paths: { type: "array", items: { type: "string" } },
+          addAll: { type: "boolean" },
+          trailers: { type: "object" },
+          dryRun: { type: "boolean" },
+        },
+        required: ["message"],
+      },
+    },
+    {
+      name: "git_push",
+      description: "Push current (or named) branch to remote with --force-with-lease. Refuses protected refs (main/master/develop/production/release) unless protectRefs is overridden. Supports dryRun.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          remote: { type: "string", description: "Default 'origin'" },
+          branch: { type: "string", description: "Default: current branch" },
+          protectRefs: { type: "array", items: { type: "string" }, description: "Override the protected-refs list" },
+          dryRun: { type: "boolean" },
+        },
+      },
+    },
+    {
+      name: "git_checkout",
+      description: "Checkout a ref. Set createBranch:true (with optional 'from') to create a new branch.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          ref: { type: "string" },
+          createBranch: { type: "boolean" },
+          from: { type: "string", description: "Source ref for createBranch (default: HEAD)" },
+          dryRun: { type: "boolean" },
+        },
+        required: ["ref"],
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // GitHub PR introspection
+    // -----------------------------------------------------------------------
+    {
+      name: "pr_list",
+      description: "List pull requests via gh CLI. Filter by state/base/head/author/search.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          state: { type: "string", enum: ["open", "closed", "merged", "all"] },
+          base: { type: "string" },
+          head: { type: "string" },
+          author: { type: "string" },
+          limit: { type: "number", description: "Default 30" },
+          search: { type: "string", description: "GitHub search qualifier" },
+        },
+      },
+    },
+    {
+      name: "pr_view",
+      description: "Get full PR details (state, body, labels, reviewers, checks, mergeable status).",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+        },
+        required: ["number"],
+      },
+    },
+    {
+      name: "pr_diff",
+      description: "Get the raw unified diff for a PR.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+        },
+        required: ["number"],
+      },
+    },
+    {
+      name: "pr_checks",
+      description: "Get the check runs and an aggregated success/failure/pending summary for a PR.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+        },
+        required: ["number"],
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // PR review / approval / comment
+    // -----------------------------------------------------------------------
+    {
+      name: "pr_review",
+      description: "Submit a PR review: APPROVE, REQUEST_CHANGES (requires body), or COMMENT.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+          event: { type: "string", enum: ["APPROVE", "REQUEST_CHANGES", "COMMENT"] },
+          body: { type: "string" },
+        },
+        required: ["number", "event"],
+      },
+    },
+    {
+      name: "pr_comment",
+      description: "Post an issue-level (non-review) comment on a PR.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+          body: { type: "string" },
+        },
+        required: ["number", "body"],
+      },
+    },
+    {
+      name: "pr_review_dismiss",
+      description: "Dismiss a submitted PR review (requires a message).",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+          reviewId: { type: "number" },
+          message: { type: "string" },
+        },
+        required: ["number", "reviewId", "message"],
+      },
+    },
+    {
+      name: "pr_request_reviewers",
+      description: "Request reviewers on a PR (user logins and/or team slugs).",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+          reviewers: { type: "array", items: { type: "string" } },
+          teamReviewers: { type: "array", items: { type: "string" } },
+        },
+        required: ["number"],
+      },
+    },
+
+    // -----------------------------------------------------------------------
+    // PR merge / ready / close / reopen
+    // -----------------------------------------------------------------------
+    {
+      name: "pr_merge",
+      description: "Merge a PR (merge/squash/rebase). Refuses protected bases (main/master/develop/production/release) unless confirmProtectedBase:true. Supports dryRun.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+          method: { type: "string", enum: ["merge", "squash", "rebase"] },
+          deleteBranch: { type: "boolean" },
+          adminOverride: { type: "boolean", description: "Pass --admin to bypass required reviews" },
+          auto: { type: "boolean", description: "Enable auto-merge once checks pass" },
+          matchSha: { type: "string", description: "Refuse merge unless head matches this sha" },
+          body: { type: "string" },
+          confirmProtectedBase: { type: "boolean" },
+          dryRun: { type: "boolean" },
+        },
+        required: ["number"],
+      },
+    },
+    {
+      name: "pr_ready",
+      description: "Mark a draft PR as ready for review.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+        },
+        required: ["number"],
+      },
+    },
+    {
+      name: "pr_close",
+      description: "Close a PR without merging. Supports dryRun.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+          dryRun: { type: "boolean" },
+        },
+        required: ["number"],
+      },
+    },
+    {
+      name: "pr_reopen",
+      description: "Reopen a closed (non-merged) PR.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          number: { type: "number" },
+        },
+        required: ["number"],
       },
     },
   ],
@@ -138,27 +455,48 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   try {
     let result: unknown;
     switch (name) {
-      case "score_review_effort":
-        result = await scoreReviewEffort(args as unknown as Parameters<typeof scoreReviewEffort>[0]);
-        break;
-      case "analyze_diff":
-        result = await analyzeDiff(args as unknown as Parameters<typeof analyzeDiff>[0]);
-        break;
-      case "propose_split":
-        result = await proposeSplit(args as unknown as Parameters<typeof proposeSplit>[0]);
-        break;
-      case "apply_split":
-        result = await applySplit(args as unknown as Parameters<typeof applySplit>[0]);
-        break;
-      case "summarize_slice":
-        result = await summarizeSlice(args as unknown as Parameters<typeof summarizeSlice>[0]);
-        break;
-      case "route_reviewers":
-        result = await routeReviewers(args as unknown as Parameters<typeof routeReviewers>[0]);
-        break;
-      case "decompose":
-        result = await decompose(args as unknown as Parameters<typeof decompose>[0]);
-        break;
+      // Decomposition
+      case "score_review_effort": result = await scoreReviewEffort(args as unknown as Parameters<typeof scoreReviewEffort>[0]); break;
+      case "analyze_diff":        result = await analyzeDiff(args as unknown as Parameters<typeof analyzeDiff>[0]); break;
+      case "propose_split":       result = await proposeSplit(args as unknown as Parameters<typeof proposeSplit>[0]); break;
+      case "apply_split":         result = await applySplit(args as unknown as Parameters<typeof applySplit>[0]); break;
+      case "summarize_slice":     result = await summarizeSlice(args as unknown as Parameters<typeof summarizeSlice>[0]); break;
+      case "route_reviewers":     result = await routeReviewers(args as unknown as Parameters<typeof routeReviewers>[0]); break;
+      case "decompose":           result = await decompose(args as unknown as Parameters<typeof decompose>[0]); break;
+
+      // Git introspection
+      case "git_status":   result = await gitStatus(args as unknown as Parameters<typeof gitStatus>[0]); break;
+      case "git_diff":     result = await gitDiff(args as unknown as Parameters<typeof gitDiff>[0]); break;
+      case "git_log":      result = await gitLog(args as unknown as Parameters<typeof gitLog>[0]); break;
+      case "git_show":     result = await gitShow(args as unknown as Parameters<typeof gitShow>[0]); break;
+      case "git_branch":   result = await gitBranch(args as unknown as Parameters<typeof gitBranch>[0]); break;
+
+      // Git mutations
+      case "git_commit":   result = await gitCommit(args as unknown as Parameters<typeof gitCommit>[0]); break;
+      case "git_push":     result = await gitPush(args as unknown as Parameters<typeof gitPush>[0]); break;
+      case "git_checkout": result = await gitCheckout(args as unknown as Parameters<typeof gitCheckout>[0]); break;
+
+      // PR introspection
+      case "pr_list":   result = await prList(args as unknown as Parameters<typeof prList>[0]); break;
+      case "pr_view":   result = await prView(args as unknown as Parameters<typeof prView>[0]); break;
+      case "pr_diff":   result = await prDiff(args as unknown as Parameters<typeof prDiff>[0]); break;
+      case "pr_checks": result = await prChecks(args as unknown as Parameters<typeof prChecks>[0]); break;
+
+      // PR review / comment
+      case "pr_review":            result = await prReview(args as unknown as Parameters<typeof prReview>[0]); break;
+      case "pr_comment":           result = await prComment(args as unknown as Parameters<typeof prComment>[0]); break;
+      case "pr_review_dismiss":    result = await prReviewDismiss(args as unknown as Parameters<typeof prReviewDismiss>[0]); break;
+      case "pr_request_reviewers": result = await prRequestReviewers(args as unknown as Parameters<typeof prRequestReviewers>[0]); break;
+
+      // PR merge / lifecycle
+      case "pr_merge":  result = await prMerge(args as unknown as Parameters<typeof prMerge>[0]); break;
+      case "pr_ready":  result = await prReady(args as unknown as Parameters<typeof prReady>[0]); break;
+      case "pr_close":  result = await prClose(args as unknown as Parameters<typeof prClose>[0]); break;
+      case "pr_reopen": result = await prReopen(args as unknown as Parameters<typeof prReopen>[0]); break;
+
+      // UI
+      case "ui_open":   result = await uiOpen(args as unknown as Parameters<typeof uiOpen>[0]); break;
+
       default:
         return { content: [{ type: "text" as const, text: `Unknown tool: ${name}` }], isError: true };
     }
@@ -173,7 +511,34 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  logger.info("server_started", { transport: "stdio" });
+
+  // Register the MCP server so the workspace helper can call roots/list,
+  // then warm the cache. Failures are silently ignored (host may not
+  // implement roots) — discovery falls back to .git walk-up from cwd.
+  registerServerForWorkspace(server);
+  void discoverWorkspaceRoot().then((ws) => {
+    logger.info("workspace_resolved", { workspace: ws });
+  });
+
+  // Start the embedded UI HTTP server unless disabled.
+  // Set UNTANGLE_UI=0 to opt out.
+  const uiEnabled = process.env.UNTANGLE_UI !== "0";
+  if (uiEnabled) {
+    try {
+      const ui = await startUiServer({ logUrl: true });
+      registerUiServer({ url: ui.url, port: ui.port, token: ui.token, staticRoot: ui.staticRoot });
+      const shutdown = async (): Promise<void> => {
+        await ui.stop().catch(() => {});
+      };
+      process.on("SIGINT",  () => { void shutdown().then(() => process.exit(0)); });
+      process.on("SIGTERM", () => { void shutdown().then(() => process.exit(0)); });
+      transport.onclose = () => { void shutdown(); };
+    } catch (err) {
+      logger.warn("ui_server_failed_to_start", { error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  logger.info("server_started", { transport: "stdio", ui: uiEnabled });
 }
 
 main().catch((err) => {

@@ -7,7 +7,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { UntangleErrorImpl } from "../schemas/types.js";
+import { UntangleErrorImpl, normalizeTarget } from "../schemas/types.js";
 import type { Target } from "../schemas/types.js";
 import { computeLoC, extractFilePaths } from "../core/diff-parser.js";
 import { HeuristicScorer, type RiskSignals } from "../core/risk-scorer.js";
@@ -70,7 +70,13 @@ async function resolveDiff(target: Target): Promise<string> {
     try {
       const { stdout: status } = await execFileP("git", ["status", "--porcelain"], { cwd });
       if (status.trim().length > 0) {
-        throw new UntangleErrorImpl("GIT_DIRTY", "Working tree is not clean", false);
+        throw new UntangleErrorImpl(
+          "GIT_DIRTY",
+          "Working tree has uncommitted changes. Commit/stash them first, " +
+            "or score the uncommitted changes themselves via { kind:'working', repo, mode:'head' }.",
+          false,
+          { files: status.trim().split("\n").slice(0, 10) },
+        );
       }
     } catch (e: unknown) {
       if (e instanceof UntangleErrorImpl) throw e;
@@ -79,8 +85,20 @@ async function resolveDiff(target: Target): Promise<string> {
     const { stdout } = await execFileP("git", ["diff", `${target.base}...${target.branch}`], { cwd });
     return stdout;
   }
-  // PR target: would need gh CLI
-  throw new UntangleErrorImpl("NOT_IMPLEMENTED", "PR target not yet supported", false);
+  if (target.kind === "working") {
+    const cwd = target.repo;
+    const mode = target.mode ?? "head";
+    const args = mode === "staged" ? ["diff", "--cached"]
+              : mode === "working" ? ["diff"]
+              : ["diff", "HEAD"];
+    const { stdout } = await execFileP("git", args, { cwd });
+    return stdout;
+  }
+  throw new UntangleErrorImpl(
+    "NOT_IMPLEMENTED",
+    "PR target not yet supported — pass the PR diff as { kind:'diff', content } instead.",
+    false,
+  );
 }
 
 export async function scoreReviewEffort(input: ScoreInput): Promise<ScoreOutput> {
@@ -91,7 +109,8 @@ export async function scoreReviewEffort(input: ScoreInput): Promise<ScoreOutput>
   if (input.policy === "conservative") threshold = 0.7;
   else if (input.policy === "aggressive") threshold = 0.3;
 
-  const raw = await resolveDiff(input.target);
+  const target = normalizeTarget(input.target);
+  const raw = await resolveDiff(target);
 
   // Empty diff fast path
   if (!raw || raw.trim().length === 0) {
