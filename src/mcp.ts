@@ -28,6 +28,7 @@ import {
 import { startUiServer } from "./ui/server.js";
 import { uiOpen, registerUiServer } from "./tools/ui-open.js";
 import { registerMcpServer } from "./llm/client.js";
+import { registerServerForWorkspace, discoverWorkspaceRoot } from "./util/workspace.js";
 import { logger } from "./util/logger.js";
 
 const server = new Server(
@@ -510,6 +511,14 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Register the MCP server so the workspace helper can call roots/list,
+  // then warm the cache. Failures are silently ignored (host may not
+  // implement roots) — discovery falls back to .git walk-up from cwd.
+  registerServerForWorkspace(server);
+  void discoverWorkspaceRoot().then((ws) => {
+    logger.info("workspace_resolved", { workspace: ws });
+  });
 
   // Start the embedded UI HTTP server unless disabled.
   // Set UNTANGLE_UI=0 to opt out.

@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod";
+import { workspaceRootSync } from "../util/workspace.js";
 
 // ---------------------------------------------------------------------------
 // ConcernKind
@@ -53,37 +54,68 @@ export const TargetSchema = z.discriminatedUnion("kind", [
 export type Target = z.infer<typeof TargetSchema>;
 
 /**
- * Forgive callers who omit `kind` or use convenience field names.
- * Returns a properly-discriminated Target or throws an UntangleError describing
- * exactly what shape was expected.
+ * Forgive callers who omit `kind`, use convenience field names, or skip `repo`
+ * (in which case we default to process.cwd() — typically the MCP host's
+ * workspace folder). Returns a properly-discriminated Target or throws
+ * UntangleError for truly unparseable input.
  *
- * Accepted shapes:
+ * Accepted shapes (repo optional in all — defaults to process.cwd()):
  *   - { kind: 'branch'|'diff'|'pr'|'working', ... }
- *   - { repo, base, branch }           → kind:'branch'
- *   - { repo, base, head }             → kind:'branch'  (head aliased to branch)
- *   - { repo, number }                 → kind:'pr'
- *   - { content }                      → kind:'diff'
- *   - { repo, mode:'working'|'staged'|'head' } → kind:'working'
- *   - { repo } alone                   → kind:'working' with mode:'head' (current uncommitted changes)
+ *   - { base, branch } | { base, head }    → kind:'branch'
+ *   - { number }                            → kind:'pr'
+ *   - { content }                           → kind:'diff'
+ *   - { mode } | { } (empty)                → kind:'working'  (mode aliases: unstaged/cached/index)
  */
 export function normalizeTarget(raw: unknown): Target {
   if (raw === null || typeof raw !== "object") {
     throw new UntangleErrorImpl(
       "BAD_INPUT",
-      "target must be an object with `kind`: 'branch' | 'diff' | 'pr' | 'working'",
+      "target must be an object — pass at minimum { repo: '/path/to/repo' } or { kind: 'branch' | 'diff' | 'pr' | 'working' }",
       false,
       { received: raw },
     );
   }
   const t = raw as Record<string, unknown>;
+  // workspaceRootSync is the cached MCP-roots / .git-walkup discovery — only
+  // used when the caller didn't pass `repo` explicitly. Falls back to cwd.
+  // (We don't await discoverWorkspaceRoot here because normalize must be sync.)
+  const repo = typeof t.repo === "string" ? t.repo : workspaceRootSync();
 
   // Explicit kind.
   if (typeof t.kind === "string") {
-    if (t.kind === "branch" && typeof t.branch !== "string" && typeof t.head === "string") {
-      return { ...t, branch: t.head as string } as unknown as Target;
+    if (t.kind === "branch") {
+      const branch = typeof t.branch === "string" ? t.branch : typeof t.head === "string" ? t.head : undefined;
+      if (!branch || typeof t.base !== "string") {
+        throw new UntangleErrorImpl(
+          "BAD_INPUT",
+          "kind:'branch' requires `base` and `branch` (or `head`)",
+          false,
+          { received: t },
+        );
+      }
+      return { kind: "branch", repo, branch, base: t.base };
     }
-    // Accept type=working as alias for kind=working too
-    return t as unknown as Target;
+    if (t.kind === "diff") {
+      if (typeof t.content !== "string") {
+        throw new UntangleErrorImpl("BAD_INPUT", "kind:'diff' requires `content`", false, { received: t });
+      }
+      return { kind: "diff", content: t.content, baseRef: typeof t.baseRef === "string" ? t.baseRef : undefined };
+    }
+    if (t.kind === "pr") {
+      if (typeof t.number !== "number") {
+        throw new UntangleErrorImpl("BAD_INPUT", "kind:'pr' requires `number`", false, { received: t });
+      }
+      return { kind: "pr", repo, number: t.number };
+    }
+    if (t.kind === "working") {
+      return { kind: "working", repo, mode: resolveMode(t.mode) };
+    }
+    throw new UntangleErrorImpl(
+      "BAD_INPUT",
+      `kind:'${t.kind}' is not recognized. Use 'branch' | 'diff' | 'pr' | 'working'.`,
+      false,
+      { received: t },
+    );
   }
   // Some callers use `type` instead of `kind`.
   if (typeof t.type === "string") {
@@ -94,35 +126,22 @@ export function normalizeTarget(raw: unknown): Target {
   if (typeof t.content === "string") {
     return { kind: "diff", content: t.content, baseRef: typeof t.baseRef === "string" ? t.baseRef : undefined };
   }
-  if (typeof t.repo === "string" && typeof t.number === "number") {
-    return { kind: "pr", repo: t.repo, number: t.number };
+  if (typeof t.number === "number") {
+    return { kind: "pr", repo, number: t.number };
   }
-  if (typeof t.repo === "string" && typeof t.base === "string") {
-    const branch = typeof t.branch === "string" ? t.branch : typeof t.head === "string" ? t.head : undefined;
-    if (branch) {
-      return { kind: "branch", repo: t.repo, branch, base: t.base };
-    }
+  if (typeof t.base === "string") {
+    const branch = typeof t.branch === "string" ? t.branch : typeof t.head === "string" ? t.head : "HEAD";
+    return { kind: "branch", repo, branch, base: t.base };
   }
-  if (typeof t.repo === "string") {
-    // Working-tree shape: { repo } or { repo, mode }
-    const m = typeof t.mode === "string" && ["working", "staged", "head"].includes(t.mode)
-      ? (t.mode as "working" | "staged" | "head")
-      : "head";
-    return { kind: "working", repo: t.repo, mode: m };
-  }
+  // No discriminating field — default to working-tree against current HEAD.
+  return { kind: "working", repo, mode: resolveMode(t.mode) };
+}
 
-  throw new UntangleErrorImpl(
-    "BAD_INPUT",
-    "target shape unrecognized — expected one of: " +
-      "{ kind:'branch', repo, branch, base } · " +
-      "{ kind:'diff', content } · " +
-      "{ kind:'pr', repo, number } · " +
-      "{ kind:'working', repo, mode? }. " +
-      "Shortcuts: { repo, base, branch } or { repo, base, head } → branch; " +
-      "{ repo, mode } or just { repo } → working tree.",
-    false,
-    { received: t },
-  );
+function resolveMode(raw: unknown): "working" | "staged" | "head" {
+  const m = typeof raw === "string" ? raw.toLowerCase() : "head";
+  if (m === "unstaged" || m === "working") return "working";
+  if (m === "cached" || m === "index" || m === "staged") return "staged";
+  return "head";
 }
 
 // ---------------------------------------------------------------------------

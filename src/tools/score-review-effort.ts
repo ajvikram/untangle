@@ -70,7 +70,13 @@ async function resolveDiff(target: Target): Promise<string> {
     try {
       const { stdout: status } = await execFileP("git", ["status", "--porcelain"], { cwd });
       if (status.trim().length > 0) {
-        throw new UntangleErrorImpl("GIT_DIRTY", "Working tree is not clean", false);
+        throw new UntangleErrorImpl(
+          "GIT_DIRTY",
+          "Working tree has uncommitted changes. Commit/stash them first, " +
+            "or score the uncommitted changes themselves via { kind:'working', repo, mode:'head' }.",
+          false,
+          { files: status.trim().split("\n").slice(0, 10) },
+        );
       }
     } catch (e: unknown) {
       if (e instanceof UntangleErrorImpl) throw e;

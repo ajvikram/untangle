@@ -49,7 +49,14 @@ async function resolveDiff(target: Target): Promise<{ raw: string; commitMessage
     // §S10: assert clean working tree
     const { stdout: status } = await execFileP("git", ["status", "--porcelain"], { cwd });
     if (status.trim().length > 0) {
-      throw new UntangleErrorImpl("GIT_DIRTY", "Working tree is not clean", false);
+      throw new UntangleErrorImpl(
+        "GIT_DIRTY",
+        "Working tree has uncommitted changes. Either commit/stash them first, " +
+          "or use kind:'working' to analyze the uncommitted changes themselves " +
+          "(e.g. { kind:'working', repo, mode:'head' }).",
+        false,
+        { files: status.trim().split("\n").slice(0, 10) },
+      );
     }
     const { stdout } = await execFileP("git", ["diff", `${target.base}...${target.branch}`], { cwd });
     // Gather commit messages
@@ -326,6 +333,30 @@ export async function analyzeDiff(input: AnalyzeDiffInput): Promise<AnalyzeDiffO
     }
   }
 
+  // Clamp every classified concern to in-range indices before doing anything
+  // else — LLMs occasionally return indices >= allHunks.length, which produced
+  // `undefined` hunks and crashed apply_split with "Cannot read properties of
+  // undefined (reading 'hash')".
+  for (const c of allClassified) {
+    c.hunkIndices = [...new Set(c.hunkIndices)].filter((i) => i >= 0 && i < allHunks.length);
+  }
+  // Drop concerns left with no hunks after filtering
+  for (let i = allClassified.length - 1; i >= 0; i--) {
+    if (allClassified[i]!.hunkIndices.length === 0) allClassified.splice(i, 1);
+  }
+  if (allClassified.length === 0) {
+    // Everything was filtered out — fall back to a single "chore" concern covering all hunks
+    allClassified.push({
+      summary: "miscellaneous changes",
+      kind: "chore",
+      hunkIndices: allHunks.map((_, i) => i),
+      dependsOn: [],
+      confidence: 0.5,
+      risk: { touchesPublicAPI: false, touchesConfig: false, touchesSecurity: false },
+    });
+    warnings.push("LLM classifier returned only invalid indices — fell back to single 'chore' concern");
+  }
+
   // Ensure every hunk is assigned
   const assignedHunks = new Set(allClassified.flatMap((c) => c.hunkIndices));
   const unassigned = allHunks.map((_, i) => i).filter((i) => !assignedHunks.has(i));
@@ -336,7 +367,9 @@ export async function analyzeDiff(input: AnalyzeDiffInput): Promise<AnalyzeDiffO
 
   // Build Concern objects with stable IDs
   const concerns: Concern[] = allClassified.map((c, _idx) => {
-    const hunks = c.hunkIndices.map((i) => allHunks[i]!);
+    const hunks = c.hunkIndices
+      .map((i) => allHunks[i])
+      .filter((h): h is HunkRef => h !== undefined);
     return {
       id: stableConcernId(hunks),
       kind: c.kind,

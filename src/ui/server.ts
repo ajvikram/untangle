@@ -130,9 +130,26 @@ export async function startUiServer(opts: { logUrl?: boolean } = {}): Promise<Ui
 
       // Session info
       if (pathname === "/api/session") {
+        const cwd = process.cwd();
+        const { discoverWorkspaceRoot } = await import("../util/workspace.js");
+        const workspace = await discoverWorkspaceRoot();
+        let isGitRepo = false;
+        let resolvedRepo: string | null = null;
+        try {
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const execFileP = promisify(execFile);
+          const { stdout } = await execFileP("git", ["rev-parse", "--show-toplevel"], { cwd: workspace });
+          resolvedRepo = stdout.trim();
+          isGitRepo = resolvedRepo.length > 0;
+        } catch { /* not a git repo */ }
         return sendJson(res, 200, {
           sessionId: store.sessionId,
           startedAt: store.startedAt,
+          cwd,
+          workspace,
+          isGitRepo,
+          resolvedRepo,
         });
       }
 

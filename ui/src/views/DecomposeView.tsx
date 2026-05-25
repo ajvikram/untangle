@@ -36,6 +36,20 @@ export function DecomposeView({ repo, initialId }: Props) {
   const branch = detail?.branch ?? "";
   const base = detail?.base ?? "main";
 
+  async function doPropose(): Promise<void> {
+    if (!detail) return;
+    setBusy(true);
+    try {
+      await api.reproposeProposal(detail.id, {});
+      toast({ kind: "ok", text: "Proposed split" });
+      await reload();
+    } catch (err) {
+      toast({ kind: "err", text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function doApply(dryRun: boolean): Promise<void> {
     if (!detail || !detail.proposal) return;
     setBusy(true);
@@ -87,6 +101,7 @@ export function DecomposeView({ repo, initialId }: Props) {
           <DetailContent
             detail={detail}
             busy={busy}
+            onPropose={doPropose}
             onDryRun={() => setConfirmApply({ dryRun: true })}
             onApply={() => setConfirmApply({ dryRun: false })}
           />
@@ -113,9 +128,10 @@ export function DecomposeView({ repo, initialId }: Props) {
   );
 }
 
-function DetailContent({ detail, busy, onDryRun, onApply }: {
+function DetailContent({ detail, busy, onPropose, onDryRun, onApply }: {
   detail: ProposalRecord;
   busy: boolean;
+  onPropose: () => void;
   onDryRun: () => void;
   onApply: () => void;
 }) {
@@ -146,6 +162,11 @@ function DetailContent({ detail, busy, onDryRun, onApply }: {
           )}
         </div>
         <div className="detail-actions">
+          {!proposal && hasGraph && (
+            <button className="btn-primary" disabled={busy} onClick={onPropose}>
+              Run propose_split
+            </button>
+          )}
           <button disabled={busy || !proposal} onClick={onDryRun}>Dry-run apply</button>
           <button className="btn-primary" disabled={busy || !proposal} onClick={onApply}>Apply (stacked PRs)</button>
         </div>

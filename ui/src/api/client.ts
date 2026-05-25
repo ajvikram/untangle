@@ -35,7 +35,14 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 export const api = {
   // session
-  session: () => request<{ sessionId: string; startedAt: string }>("/api/session"),
+  session: () => request<{
+    sessionId: string;
+    startedAt: string;
+    cwd: string;
+    workspace: string;
+    isGitRepo: boolean;
+    resolvedRepo: string | null;
+  }>("/api/session"),
   activity: (limit = 100) => request<{ activity: ActivityEntry[] }>(`/api/activity?limit=${limit}`),
 
   // proposals

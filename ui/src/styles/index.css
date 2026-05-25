@@ -105,6 +105,15 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 /* Auth error */
 .auth-error { padding: 40px; max-width: 600px; margin: 0 auto; }
 
+/* Repo missing banner */
+.repo-banner {
+  padding: 10px 16px;
+  background: color-mix(in srgb, var(--warn) 15%, var(--panel));
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--warn);
+  font-size: 13px;
+}
+
 /* Decompose */
 .decompose { display: grid; grid-template-columns: 280px 1fr; height: 100%; }
 .proposal-list { border-right: 1px solid var(--border); overflow-y: auto; background: var(--panel); }

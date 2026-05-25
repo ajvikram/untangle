@@ -24,6 +24,7 @@ export function PrDashboard({ repo, initialNumber }: Props) {
   const [confirm, setConfirm] = useState<ConfirmAction>(null);
 
   const reload = useCallback(async () => {
+    if (!repo.trim()) { setList([]); return; }
     try {
       const { prs } = await api.listPrs({ repo, state: stateFilter, limit: 50 });
       setList(prs);

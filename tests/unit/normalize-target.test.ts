@@ -38,21 +38,45 @@ describe("normalizeTarget", () => {
     expect(normalizeTarget({ repo: "/r", mode: "staged" })).toEqual({ kind: "working", repo: "/r", mode: "staged" });
   });
 
-  it("accepts `type` as alias for `kind`", () => {
-    expect(normalizeTarget({ type: "working", repo: "/r", mode: "working" }))
-      .toEqual({ type: "working", kind: "working", repo: "/r", mode: "working" });
+  it("accepts 'unstaged' as alias for mode:'working'", () => {
+    expect(normalizeTarget({ repo: "/r", mode: "unstaged" })).toEqual({ kind: "working", repo: "/r", mode: "working" });
   });
 
-  it("throws BAD_INPUT with a helpful hint for unrecognized shape", () => {
-    try {
-      normalizeTarget({ foo: "bar" });
-      throw new Error("expected throw");
-    } catch (e) {
-      expect(e).toBeInstanceOf(UntangleErrorImpl);
-      const msg = (e as UntangleErrorImpl).message;
-      expect(msg).toContain("kind:'branch'");
-      expect(msg).toContain("Shortcuts");
-    }
+  it("accepts 'cached'/'index' as alias for mode:'staged'", () => {
+    expect(normalizeTarget({ repo: "/r", mode: "cached" })).toEqual({ kind: "working", repo: "/r", mode: "staged" });
+    expect(normalizeTarget({ repo: "/r", mode: "index" })).toEqual({ kind: "working", repo: "/r", mode: "staged" });
+  });
+
+  it("accepts `type` as alias for `kind`", () => {
+    expect(normalizeTarget({ type: "working", repo: "/r", mode: "working" }))
+      .toEqual({ kind: "working", repo: "/r", mode: "working" });
+  });
+
+  it("defaults missing `repo` to process.cwd() (no throw)", () => {
+    const out = normalizeTarget({ base: "main", branch: "dev" });
+    expect(out.kind).toBe("branch");
+    expect(out).toMatchObject({ kind: "branch", branch: "dev", base: "main" });
+    // repo is process.cwd() — just assert it's a non-empty string
+    expect((out as { repo: string }).repo).toBeTruthy();
+  });
+
+  it("falls back to kind:'working' for under-specified objects rather than throwing", () => {
+    const out = normalizeTarget({ foo: "bar" });
+    expect(out.kind).toBe("working");
+    expect((out as { repo: string }).repo).toBeTruthy();
+  });
+
+  it("throws BAD_INPUT for kind:'branch' missing base/branch", () => {
+    expect(() => normalizeTarget({ kind: "branch", repo: "/r" }))
+      .toThrow(UntangleErrorImpl);
+  });
+
+  it("throws BAD_INPUT for kind:'diff' missing content", () => {
+    expect(() => normalizeTarget({ kind: "diff" })).toThrow(UntangleErrorImpl);
+  });
+
+  it("throws BAD_INPUT for unknown kind", () => {
+    expect(() => normalizeTarget({ kind: "wibble", repo: "/r" })).toThrow(UntangleErrorImpl);
   });
 
   it("throws when target is null", () => {

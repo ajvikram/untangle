@@ -19,6 +19,7 @@ export function GitPanel({ repo }: Props) {
   const [confirmPush, setConfirmPush] = useState<{ branch: string; force: boolean } | null>(null);
 
   const reload = useCallback(async () => {
+    if (!repo.trim()) { setStatus(null); setLog([]); setBranches(null); return; }
     try {
       const [s, l, b] = await Promise.all([
         api.gitStatus(repo),
@@ -34,6 +35,7 @@ export function GitPanel({ repo }: Props) {
   }, [repo, toast]);
 
   const reloadDiff = useCallback(async () => {
+    if (!repo.trim()) { setDiff(""); return; }
     try {
       setDiff(await api.gitDiff({ repo, mode: diffMode }));
     } catch {
