@@ -24,13 +24,17 @@ export async function proposeSplit(input: ProposeSplitInput): Promise<{ schemaVe
     stackStrategy = "flat", preserveOrder, riskScore, riskThreshold = 0.5,
   } = input;
 
+  // Be defensive — agents sometimes hand-construct a graph with concerns + dag
+  // but no `meta` block. Derive LoC from the concerns' hunks when missing.
+  const originalLoC = graph.meta?.loc ?? deriveLoc(graph);
+
   if (riskScore !== undefined && riskScore < riskThreshold) {
     return {
       schemaVersion: "1",
       proposal: {
         slices: [], stackStrategy, rejected: true,
         rejectionReason: `Risk score ${riskScore} < threshold ${riskThreshold}`,
-        meta: { originalLoC: graph.meta.loc, sliceCount: 0, proposalId: canonicalHash([]) },
+        meta: { originalLoC, sliceCount: 0, proposalId: canonicalHash([]) },
       },
     };
   }
@@ -45,7 +49,17 @@ export async function proposeSplit(input: ProposeSplitInput): Promise<{ schemaVe
     schemaVersion: "1",
     proposal: {
       slices, stackStrategy, rejected: false,
-      meta: { originalLoC: graph.meta.loc, sliceCount: slices.length, proposalId },
+      meta: { originalLoC, sliceCount: slices.length, proposalId },
     },
   };
+}
+
+function deriveLoc(graph: ConcernGraph): number {
+  let total = 0;
+  for (const c of graph.concerns ?? []) {
+    for (const h of c.hunks ?? []) {
+      total += (h.newLines ?? 0) + (h.oldLines ?? 0);
+    }
+  }
+  return total;
 }
