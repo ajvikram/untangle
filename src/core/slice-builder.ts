@@ -144,14 +144,10 @@ export function buildSlices(graph: ConcernGraph, opts: SliceBuildOptions): Slice
     assigned.add(id);
   }
 
-  // Check slice count limit
-  if (sliceGroups.length > MAX_SLICES) {
-    throw new UntangleErrorImpl(
-      "TOO_MANY_SLICES",
-      `Planner produced ${sliceGroups.length} slices, exceeding maximum of ${MAX_SLICES}`,
-      false,
-      { sliceCount: sliceGroups.length, limit: MAX_SLICES },
-    );
+  // If we exceed the hard cap, merge trailing slices down to MAX_SLICES
+  while (sliceGroups.length > MAX_SLICES) {
+    const last = sliceGroups.pop()!;
+    sliceGroups[sliceGroups.length - 1]!.push(...last);
   }
 
   // If we exceed the default soft cap (8), merge trailing slices into the last group
