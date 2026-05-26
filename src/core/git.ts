@@ -309,6 +309,53 @@ export class GitWrapper {
     }
   }
 
+  /** List stashes. */
+  async stashList(): Promise<Array<{ ref: string; subject: string; date: string }>> {
+    try {
+      const out = await this.git(["stash", "list", "--format=%gd%x09%aI%x09%s"]);
+      if (!out) return [];
+      return out.split("\n").map((line) => {
+        const [ref, date, subject] = line.split("\t");
+        return { ref: ref ?? "", date: date ?? "", subject: subject ?? "" };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  /** Push a stash. Returns the created ref (e.g. "stash@{0}"). */
+  async stashPush(opts: { message?: string; includeUntracked?: boolean; keepIndex?: boolean } = {}): Promise<string> {
+    const args = ["stash", "push"];
+    if (opts.includeUntracked) args.push("--include-untracked");
+    if (opts.keepIndex) args.push("--keep-index");
+    if (opts.message) args.push("-m", opts.message);
+    await this.git(args);
+    // Resolve the ref of the stash we just created
+    const list = await this.stashList();
+    return list[0]?.ref ?? "stash@{0}";
+  }
+
+  /** Pop a stash. */
+  async stashPop(ref?: string): Promise<void> {
+    const args = ["stash", "pop"];
+    if (ref) args.push(ref);
+    await this.git(args);
+  }
+
+  /** Apply (but don't pop) a stash. */
+  async stashApply(ref?: string): Promise<void> {
+    const args = ["stash", "apply"];
+    if (ref) args.push(ref);
+    await this.git(args);
+  }
+
+  /** Drop a stash. */
+  async stashDrop(ref?: string): Promise<void> {
+    const args = ["stash", "drop"];
+    if (ref) args.push(ref);
+    await this.git(args);
+  }
+
   /** Apply a patch from a string. */
   async applyPatch(patch: string): Promise<void> {
     try {

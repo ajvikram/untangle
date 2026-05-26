@@ -58,6 +58,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  editProposal: (id: string, slices: Slice[]) =>
+    request<{ ok: boolean; proposal: SplitProposal }>(`/api/proposals/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ slices }),
+    }),
+  deleteProposal: (id: string) =>
+    request<{ ok: boolean }>(`/api/proposals/${id}`, { method: "DELETE" }),
+  clearProposals: () =>
+    request<{ ok: boolean }>(`/api/proposals`, { method: "DELETE" }),
+
+  // session
+  regenerateToken: () =>
+    request<{ token: string; url: string }>(`/api/session/regenerate`, { method: "POST" }),
 
   // PRs
   listPrs: (q: PrListQuery = {}) => {

@@ -245,3 +245,53 @@ export async function prReopen(input: PrReopenInput): Promise<{ schemaVersion: "
   await gh.reopenPR(input.number);
   return { schemaVersion: "1", number: input.number };
 }
+
+// ---------------------------------------------------------------------------
+// Creation
+// ---------------------------------------------------------------------------
+
+export interface PrCreateInput {
+  repo?: string;
+  base: string;
+  head: string;
+  title: string;
+  body?: string;
+  draft?: boolean;
+}
+export async function prCreate(input: PrCreateInput): Promise<{ schemaVersion: "1"; url: string }> {
+  if (!input.base || !input.head || !input.title) {
+    throw new UntangleErrorImpl("BAD_INPUT", "pr_create requires `base`, `head`, and `title`", false);
+  }
+  const gh = new GhWrapper(input.repo ?? ".");
+  const url = await gh.createPR({
+    base: input.base,
+    head: input.head,
+    title: input.title,
+    body: input.body ?? "",
+    draft: input.draft,
+  });
+  return { schemaVersion: "1", url };
+}
+
+// ---------------------------------------------------------------------------
+// Auth status
+// ---------------------------------------------------------------------------
+
+export interface GhAuthStatusInput { repo?: string }
+export async function ghAuthStatus(input: GhAuthStatusInput = {}): Promise<{
+  schemaVersion: "1";
+  authenticated: boolean;
+  error?: string;
+}> {
+  const gh = new GhWrapper(input.repo ?? ".");
+  try {
+    await gh.assertAuth();
+    return { schemaVersion: "1", authenticated: true };
+  } catch (err) {
+    return {
+      schemaVersion: "1",
+      authenticated: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}

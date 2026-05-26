@@ -200,3 +200,62 @@ export async function gitCheckout(input: GitCheckoutInput): Promise<{
   await git.checkout(input.ref);
   return { schemaVersion: "1", ref: input.ref, created: false, dryRun: false };
 }
+
+// ---------------------------------------------------------------------------
+// Stash
+// ---------------------------------------------------------------------------
+
+export interface GitStashListInput { repo?: string }
+export async function gitStashList(input: GitStashListInput = {}): Promise<{
+  schemaVersion: "1";
+  stashes: Awaited<ReturnType<GitWrapper["stashList"]>>;
+}> {
+  const git = new GitWrapper(input.repo ?? ".");
+  return { schemaVersion: "1", stashes: await git.stashList() };
+}
+
+export interface GitStashInput {
+  repo?: string;
+  message?: string;
+  includeUntracked?: boolean;
+  keepIndex?: boolean;
+}
+export async function gitStash(input: GitStashInput = {}): Promise<{
+  schemaVersion: "1";
+  ref: string;
+}> {
+  const git = new GitWrapper(input.repo ?? ".");
+  const ref = await git.stashPush({
+    message: input.message,
+    includeUntracked: input.includeUntracked,
+    keepIndex: input.keepIndex,
+  });
+  logger.info("git_stash_tool", { ref });
+  return { schemaVersion: "1", ref };
+}
+
+export interface GitStashPopInput {
+  repo?: string;
+  ref?: string;
+  apply?: boolean; // if true, apply but don't drop
+}
+export async function gitStashPop(input: GitStashPopInput = {}): Promise<{
+  schemaVersion: "1";
+  popped: boolean;
+  ref?: string;
+}> {
+  const git = new GitWrapper(input.repo ?? ".");
+  if (input.apply) {
+    await git.stashApply(input.ref);
+    return { schemaVersion: "1", popped: false, ref: input.ref };
+  }
+  await git.stashPop(input.ref);
+  return { schemaVersion: "1", popped: true, ref: input.ref };
+}
+
+export interface GitStashDropInput { repo?: string; ref?: string }
+export async function gitStashDrop(input: GitStashDropInput = {}): Promise<{ schemaVersion: "1"; ref?: string }> {
+  const git = new GitWrapper(input.repo ?? ".");
+  await git.stashDrop(input.ref);
+  return { schemaVersion: "1", ref: input.ref };
+}

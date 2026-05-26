@@ -7,6 +7,7 @@
 import { EventEmitter } from "node:events";
 import { randomUUID } from "node:crypto";
 import type { ConcernGraph, SplitProposal } from "../schemas/types.js";
+import { loadState, saveStateDebounced } from "./persist.js";
 
 export type ActivityKind =
   | "analyze_diff"
@@ -60,6 +61,34 @@ class StateStore extends EventEmitter {
   private activity: ActivityEntry[] = [];
   private readonly maxActivity = 500;
   private readonly maxProposals = 50;
+  private persistenceEnabled = true;
+
+  constructor() {
+    super();
+    this.hydrateFromDisk();
+  }
+
+  private hydrateFromDisk(): void {
+    if (process.env.UNTANGLE_PERSIST === "0") {
+      this.persistenceEnabled = false;
+      return;
+    }
+    const loaded = loadState();
+    if (!loaded) return;
+    for (const p of loaded.proposals as ProposalRecord[]) {
+      if (p && typeof p.id === "string") this.proposals.set(p.id, p);
+    }
+    this.activity = (loaded.activity as ActivityEntry[]).filter((a) => a && typeof a.id === "string");
+  }
+
+  private persist(): void {
+    if (!this.persistenceEnabled) return;
+    saveStateDebounced({
+      proposals: [...this.proposals.values()],
+      activity: this.activity,
+      savedAt: new Date().toISOString(),
+    });
+  }
 
   recordAnalyze(opts: { repo?: string; branch?: string; base?: string; graph: ConcernGraph }): string {
     const id = randomUUID();
@@ -73,6 +102,7 @@ class StateStore extends EventEmitter {
     });
     this.trimProposals();
     this.emit("change", { type: "proposal_added", id });
+    this.persist();
     return id;
   }
 
@@ -81,6 +111,7 @@ class StateStore extends EventEmitter {
     if (!rec) return;
     rec.proposal = proposal;
     this.emit("change", { type: "proposal_updated", id: proposalId });
+    this.persist();
   }
 
   attachApplyResult(
@@ -91,6 +122,7 @@ class StateStore extends EventEmitter {
     if (!rec) return;
     rec.applied = { ts: new Date().toISOString(), ...result };
     this.emit("change", { type: "proposal_applied", id: proposalId });
+    this.persist();
   }
 
   listProposals(): ProposalRecord[] {
@@ -99,6 +131,21 @@ class StateStore extends EventEmitter {
 
   getProposal(id: string): ProposalRecord | undefined {
     return this.proposals.get(id);
+  }
+
+  deleteProposal(id: string): boolean {
+    const removed = this.proposals.delete(id);
+    if (removed) {
+      this.emit("change", { type: "proposal_removed", id });
+      this.persist();
+    }
+    return removed;
+  }
+
+  clearProposals(): void {
+    this.proposals.clear();
+    this.emit("change", { type: "proposals_cleared" });
+    this.persist();
   }
 
   logActivity(entry: Omit<ActivityEntry, "id" | "ts">): ActivityEntry {
@@ -112,6 +159,7 @@ class StateStore extends EventEmitter {
       this.activity = this.activity.slice(-this.maxActivity);
     }
     this.emit("activity", e);
+    this.persist();
     return e;
   }
 

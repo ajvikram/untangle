@@ -72,10 +72,37 @@ export function DecomposeView({ repo, initialId }: Props) {
 
   const slices = detail?.proposal?.slices ?? [];
 
+  async function doClearAll(): Promise<void> {
+    if (!confirm("Clear all proposals from history? This cannot be undone.")) return;
+    try {
+      await api.clearProposals();
+      toast({ kind: "ok", text: "Proposals cleared" });
+      setSelectedId(null);
+      await reload();
+    } catch (err) {
+      toast({ kind: "err", text: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  async function doDelete(id: string): Promise<void> {
+    try {
+      await api.deleteProposal(id);
+      if (selectedId === id) setSelectedId(null);
+      await reload();
+    } catch (err) {
+      toast({ kind: "err", text: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
   return (
     <div className="decompose">
       <aside className="proposal-list">
-        <div className="section-title">Proposals</div>
+        <div className="section-title">
+          Proposals
+          {proposals.length > 0 && (
+            <button className="link-btn" onClick={() => void doClearAll()} title="Clear all proposals">clear all</button>
+          )}
+        </div>
         {proposals.length === 0 && <div className="empty">No proposals yet. Run <code>analyze_diff</code> via your agent.</div>}
         <ul>
           {proposals.map((p) => (
@@ -87,6 +114,11 @@ export function DecomposeView({ repo, initialId }: Props) {
               <div className="proposal-title">
                 {p.proposal ? `${p.proposal.slices.length} slices` : "graph only"}
                 {p.applied && <span className={`badge ${p.applied.dryRun ? "dry" : "live"}`}>{p.applied.dryRun ? "dry-run" : "applied"}</span>}
+                <button
+                  className="link-btn proposal-delete"
+                  title="Delete proposal"
+                  onClick={(e) => { e.stopPropagation(); void doDelete(p.id); }}
+                >×</button>
               </div>
               <div className="proposal-meta">
                 {p.branch ?? "—"} → {p.base ?? "—"} · {new Date(p.ts).toLocaleTimeString()}
@@ -104,6 +136,7 @@ export function DecomposeView({ repo, initialId }: Props) {
             onPropose={doPropose}
             onDryRun={() => setConfirmApply({ dryRun: true })}
             onApply={() => setConfirmApply({ dryRun: false })}
+            onSlicesChanged={() => void reload()}
           />
         ) : (
           <div className="empty-detail">Select a proposal on the left.</div>
@@ -128,12 +161,13 @@ export function DecomposeView({ repo, initialId }: Props) {
   );
 }
 
-function DetailContent({ detail, busy, onPropose, onDryRun, onApply }: {
+function DetailContent({ detail, busy, onPropose, onDryRun, onApply, onSlicesChanged }: {
   detail: ProposalRecord;
   busy: boolean;
   onPropose: () => void;
   onDryRun: () => void;
   onApply: () => void;
+  onSlicesChanged: () => void;
 }) {
   const graph = detail.graph;
   const proposal = detail.proposal;
@@ -142,10 +176,10 @@ function DetailContent({ detail, busy, onPropose, onDryRun, onApply }: {
   const summary = useMemo(() => {
     if (!graph) return null;
     return {
-      concerns: graph.concerns.length,
-      files: graph.meta.fileCount,
-      loc: graph.meta.loc,
-      languages: graph.meta.languagesDetected,
+      concerns: graph.concerns?.length ?? 0,
+      files: graph.meta?.fileCount ?? 0,
+      loc: graph.meta?.loc ?? 0,
+      languages: graph.meta?.languagesDetected ?? [],
     };
   }, [graph]);
 
@@ -191,7 +225,7 @@ function DetailContent({ detail, busy, onPropose, onDryRun, onApply }: {
             : <div className="empty">No concern graph yet.</div>}
         </div>
         <div className="slices-pane">
-          <SliceEditor slices={slices} proposalId={detail.id} />
+          <SliceEditor slices={slices} proposalId={detail.id} onChange={onSlicesChanged} />
         </div>
       </div>
     </>

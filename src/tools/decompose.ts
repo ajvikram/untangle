@@ -57,6 +57,11 @@ export interface DecomposeInput {
 export interface DecomposeOutput {
   schemaVersion: "1";
   proposalId: string;
+  dryRun: boolean;
+  pushed: boolean;
+  prsCreated: number;
+  /** Top-level human-readable status: tells the user what actually happened. */
+  status: string;
   slices: Array<{
     index: number;
     title: string;
@@ -109,9 +114,20 @@ export async function decompose(input: DecomposeInput): Promise<DecomposeOutput>
     branchPrefix,
   });
 
+  const prsCreated = applyResult.created.filter((c) => !!c.prUrl).length;
+  const sliceCount = proposal.slices.length;
+  const status = dryRun
+    ? `DRY-RUN: ${sliceCount} branch(es) created locally only. NO push to ${pushRemote}, NO PRs opened. ` +
+      `Re-run with dryRun:false to push and create ${draftPRs ? "draft " : ""}PRs.`
+    : `Applied ${sliceCount} slice(s): pushed to ${pushRemote}, ${prsCreated} ${draftPRs ? "draft " : ""}PR(s) opened.`;
+
   return {
     schemaVersion: "1",
     proposalId: proposal.meta.proposalId,
+    dryRun,
+    pushed: !dryRun && applyResult.created.length > 0,
+    prsCreated,
+    status,
     slices: proposal.slices.map((slice, i) => {
       const created = applyResult.created.find((c) => c.sliceId === slice.id);
       const assignment = routing.assignments.find((a) => a.sliceId === slice.id);

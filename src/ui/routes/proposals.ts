@@ -38,6 +38,31 @@ export async function reproposeProposal(req: IncomingMessage, res: ServerRespons
   }
 }
 
+/**
+ * PUT /api/proposals/:id — replace the proposal's slices.
+ * Body: { slices: Slice[] }  (sliceIds + hunks the UI editor produced).
+ * Used by the slice editor for rename / move-hunk-between-slices.
+ */
+export async function editProposal(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
+  const rec = getStore().getProposal(id);
+  if (!rec || !rec.proposal) return sendError(res, 404, "Proposal not found or has no split");
+  const body = await readJsonBody<{ slices?: SplitProposal["slices"] }>(req);
+  if (!Array.isArray(body.slices)) return sendError(res, 400, "body.slices must be an array");
+  // Validate: every slice has id + title + hunks + concernIds + effortScore.
+  for (const s of body.slices) {
+    if (!s || typeof s.id !== "string" || typeof s.title !== "string" || !Array.isArray(s.hunks)) {
+      return sendError(res, 400, "each slice must have { id, title, hunks, concernIds, effortScore }");
+    }
+  }
+  const next = {
+    ...rec.proposal,
+    slices: body.slices,
+    meta: { ...rec.proposal.meta, sliceCount: body.slices.length },
+  };
+  getStore().attachProposal(id, next);
+  sendJson(res, 200, { ok: true, proposal: next });
+}
+
 export async function applyProposal(req: IncomingMessage, res: ServerResponse, id: string): Promise<void> {
   const rec = getStore().getProposal(id);
   if (!rec || !rec.proposal) return sendError(res, 404, "Proposal not found or has no split");

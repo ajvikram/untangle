@@ -6,8 +6,16 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { startUiServer, type UiServer } from "../../src/ui/server.js";
 import { getStore, _resetStore } from "../../src/ui/state.js";
+
+// Isolate persistent state to a tmpdir so tests don't touch ~/.config/untangle
+const cfgDir = mkdtempSync(join(tmpdir(), "untangle-cfg-"));
+process.env.UNTANGLE_CONFIG_DIR = cfgDir;
+process.env.UNTANGLE_UI_PORT = "0"; // ephemeral — avoid 7842 clashes across test files
 
 let ui: UiServer;
 let base: string;
@@ -33,7 +41,10 @@ beforeAll(async () => {
   ui = await startUiServer({ logUrl: false });
   base = `http://127.0.0.1:${ui.port}`;
 });
-afterAll(async () => { await ui.stop(); });
+afterAll(async () => {
+  await ui.stop();
+  rmSync(cfgDir, { recursive: true, force: true });
+});
 
 describe("UI server: bind + healthz", () => {
   it("binds 127.0.0.1 only with an ephemeral port", () => {

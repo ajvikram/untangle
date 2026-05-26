@@ -85,6 +85,17 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 .tabs { display: flex; gap: 4px; flex: 1; }
 .tabs button { border: 1px solid transparent; background: transparent; padding: 5px 12px; }
 .tabs button.active { background: var(--bg); border-color: var(--border); color: var(--primary); }
+.header-actions { display: flex; gap: 4px; }
+.header-actions button { font-size: 12px; padding: 4px 8px; }
+.tabs kbd, .kbd-table kbd {
+  display: inline-block; padding: 1px 5px; margin-left: 4px;
+  font-size: 10px; font-family: "SF Mono", Menlo, monospace;
+  border: 1px solid var(--border); border-radius: 3px;
+  background: var(--code-bg); color: var(--muted);
+}
+.kbd-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+.kbd-table td { padding: 6px 4px; }
+.kbd-table td:first-child { color: var(--muted); width: 40%; }
 .repo-input { display: flex; align-items: center; gap: 6px; }
 .repo-input label { color: var(--muted); font-size: 12px; }
 .repo-input input { width: 240px; }
@@ -159,7 +170,22 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 .slice-mix { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
 .kind-badge { font-size: 10px; padding: 1px 6px; border-radius: 3px; background: var(--code-bg); color: var(--muted); }
 .slice-card details { margin-top: 6px; font-size: 12px; }
-.hunk-list { margin: 4px 0 0 12px; }
+.slice-edit-actions { display: flex; gap: 4px; text-transform: none; }
+.slice-edit-actions button { font-size: 11px; padding: 2px 8px; }
+.slice-title-input {
+  flex: 1; background: transparent; border: 1px solid transparent;
+  font-weight: 500; padding: 2px 4px; border-radius: 3px; font-size: 13px;
+  color: var(--text);
+}
+.slice-title-input:hover, .slice-title-input:focus { border-color: var(--border); background: var(--bg); }
+.hunk-list { margin: 4px 0 0 12px; list-style: none; padding-left: 0; }
+.hunk-list li {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 6px;
+  align-items: center; padding: 2px 0; font-size: 11px;
+}
+.hunk-path { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hunk-loc { color: var(--muted); }
+.hunk-list select { font-size: 11px; padding: 1px 4px; max-width: 180px; }
 
 .badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; background: var(--code-bg); color: var(--muted); margin-left: 4px; }
 .badge.live { background: var(--ok); color: #fff; }
@@ -227,7 +253,21 @@ input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: -
 
 /* Activity */
 .activity { padding: 0 12px 20px; overflow-y: auto; height: 100%; }
+.activity-filters { display: flex; gap: 4px; text-transform: none; }
+.activity-filters input { width: 120px; font-size: 11px; padding: 2px 6px; }
+.activity-filters select { font-size: 11px; padding: 2px 6px; }
 .activity-list { padding-top: 6px; }
+
+.proposal-list li { position: relative; }
+.proposal-delete {
+  margin-left: auto; opacity: 0; transition: opacity 100ms;
+}
+.proposal-list li:hover .proposal-delete { opacity: 1; }
+.link-btn {
+  background: transparent; border: none; color: var(--muted);
+  font-size: 11px; padding: 0 4px; cursor: pointer; text-transform: none;
+}
+.link-btn:hover { color: var(--text); }
 .activity-list li {
   border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px;
   margin-bottom: 6px; background: var(--panel);

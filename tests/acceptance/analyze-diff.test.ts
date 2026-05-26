@@ -165,11 +165,14 @@ describe("analyze_diff", () => {
       expect(result.graph.meta.hunkCount).toBe(0);
     });
 
-    it("rejects circular dependencies with DAG_CYCLE", async () => {
+    it("breaks circular dependencies instead of failing", async () => {
+      // Previously this threw DAG_CYCLE, which left users stuck whenever the
+      // LLM/heuristic produced overlapping dependencies. New behavior: break
+      // the smallest number of back-edges and proceed with a valid DAG.
       const target = await loadFixture("cycle");
-      await expect(analyzeDiff({ target })).rejects.toMatchObject({
-        code: "DAG_CYCLE",
-      });
+      const result = await analyzeDiff({ target });
+      expect(result.schemaVersion).toBe("1");
+      expect(result.graph.concerns.length).toBeGreaterThan(0);
     });
 
     it("handles binary-mixed diffs with a warning", async () => {
