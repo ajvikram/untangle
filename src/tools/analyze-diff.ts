@@ -381,7 +381,17 @@ export async function analyzeDiff(input: AnalyzeDiffInput): Promise<AnalyzeDiffO
     };
   });
 
-  // Resolve inter-concern dependencies based on LLM predictions AND file-level overlap
+  // Resolve inter-concern dependencies based on LLM predictions AND file-level overlap.
+  // File-level overlap is DIRECTIONAL — the concern whose earliest hunk in the
+  // shared file appears later in the diff depends on the concern with the earlier
+  // hunk. Symmetric "both depend on each other" would create cycles.
+  const earliestHunkInFile = (concernIdx: number, filePath: string): number => {
+    let min = Infinity;
+    for (const h of concerns[concernIdx]!.hunks) {
+      if (h.filePath === filePath) min = Math.min(min, h.oldStart, h.newStart);
+    }
+    return min;
+  };
   for (let i = 0; i < concerns.length; i++) {
     const mappedDeps = new Set<string>();
     // 1. LLM predicted dependencies
@@ -390,16 +400,24 @@ export async function analyzeDiff(input: AnalyzeDiffInput): Promise<AnalyzeDiffO
         mappedDeps.add(concerns[depIdx]!.id);
       }
     }
-    // 2. File-level overlap dependencies
+    // 2. Directional file-level overlap
     const myFiles = new Set(concerns[i]!.hunks.map((h) => h.filePath));
     for (let j = 0; j < concerns.length; j++) {
       if (j === i) continue;
       const theirFiles = new Set(concerns[j]!.hunks.map((h) => h.filePath));
-      const overlaps = [...myFiles].some((f) => theirFiles.has(f));
-      if (overlaps) {
+      const sharedFile = [...myFiles].find((f) => theirFiles.has(f));
+      if (!sharedFile) continue;
+      const mine = earliestHunkInFile(i, sharedFile);
+      const theirs = earliestHunkInFile(j, sharedFile);
+      // Tie-break by concern array index (deterministic)
+      const iIsEarlier = mine < theirs || (mine === theirs && i < j);
+      if (!iIsEarlier) {
+        // j's earliest hunk comes first → i depends on j
         mappedDeps.add(concerns[j]!.id);
       }
     }
+    // Never depend on self
+    mappedDeps.delete(concerns[i]!.id);
     concerns[i]!.dependsOn = [...mappedDeps];
   }
 

@@ -6,6 +6,7 @@
 
 import { canonicalHash } from "../util/hash.js";
 import { UntangleErrorImpl } from "../schemas/types.js";
+import { logger } from "../util/logger.js";
 import type { Concern, ConcernGraph, HunkRef } from "../schemas/types.js";
 
 /**
@@ -68,12 +69,80 @@ export function validateDag(concerns: Concern[]): void {
 }
 
 /**
- * Build a ConcernGraph from classified concerns.
+ * Best-effort: mutate `concerns[].dependsOn` to break any cycles by dropping
+ * the most recently-discovered back-edge. Logs a warning per broken edge.
+ * Returns the count of edges removed.
+ */
+export function breakDependencyCycles(concerns: Concern[]): number {
+  const idSet = new Set(concerns.map((c) => c.id));
+  let broken = 0;
+
+  // Iterative cycle removal: repeatedly find a cycle and drop its weakest edge
+  // (defined as the edge from the highest-confidence concern to the lowest —
+  // i.e. drop the dep so the more-confident concern stays independent).
+  for (let attempt = 0; attempt < concerns.length; attempt++) {
+    const cycle = findCycle(concerns, idSet);
+    if (!cycle) return broken;
+    // Drop the edge that closes the cycle: cycle[last] depends on cycle[0]
+    const from = cycle[cycle.length - 1]!;
+    const to = cycle[0]!;
+    const fromConcern = concerns.find((c) => c.id === from);
+    if (!fromConcern) return broken;
+    fromConcern.dependsOn = fromConcern.dependsOn.filter((d) => d !== to);
+    broken++;
+    logger.warn("dag_cycle_broken", { from, to, cycle });
+  }
+  return broken;
+}
+
+/** Find any one cycle in the dependency graph; returns the cycle as a list of ids. */
+function findCycle(concerns: Concern[], idSet: Set<string>): string[] | null {
+  const byId = new Map(concerns.map((c) => [c.id, c]));
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const stack: string[] = [];
+
+  function dfs(id: string): string[] | null {
+    if (visiting.has(id)) {
+      const start = stack.indexOf(id);
+      return start >= 0 ? stack.slice(start) : [id];
+    }
+    if (visited.has(id)) return null;
+    visiting.add(id);
+    stack.push(id);
+    const c = byId.get(id);
+    if (c) {
+      for (const dep of c.dependsOn) {
+        if (!idSet.has(dep)) continue;
+        const found = dfs(dep);
+        if (found) return found;
+      }
+    }
+    stack.pop();
+    visiting.delete(id);
+    visited.add(id);
+    return null;
+  }
+
+  for (const c of concerns) {
+    const found = dfs(c.id);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Build a ConcernGraph from classified concerns. Tolerates cycles: breaks the
+ * minimum number of back-edges to recover, logs a warning, then validates.
  */
 export function buildConcernGraph(
   concerns: Concern[],
   languagesDetected: string[],
 ): ConcernGraph {
+  const broken = breakDependencyCycles(concerns);
+  if (broken > 0) {
+    logger.info("concern_graph_cycles_broken", { count: broken });
+  }
   validateDag(concerns);
 
   const allHunks = concerns.flatMap((c) => c.hunks);

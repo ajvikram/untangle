@@ -91,4 +91,28 @@ describe("buildConcernGraph", () => {
     const graph = buildConcernGraph(concerns, ["ts"]);
     expect(graph.dag).toEqual([["b", "a"]]);
   });
+
+  it("breaks dependency cycles instead of throwing", () => {
+    // Regression: agent-generated dependencies sometimes form a cycle when
+    // multiple concerns touch the same file. buildConcernGraph used to throw
+    // DAG_CYCLE; it must now break the cycle and proceed.
+    const concerns: Concern[] = [
+      { id: "a", kind: "feature", summary: "a", hunks: [hunk("shared.ts", "h1")], dependsOn: ["b"], confidence: 0.9, riskHints: { touchesPublicAPI: false, touchesConfig: false, touchesSecurity: false } },
+      { id: "b", kind: "feature", summary: "b", hunks: [hunk("shared.ts", "h2")], dependsOn: ["a"], confidence: 0.9, riskHints: { touchesPublicAPI: false, touchesConfig: false, touchesSecurity: false } },
+    ];
+    expect(() => buildConcernGraph(concerns, ["ts"])).not.toThrow();
+    // After breaking the cycle, the resulting graph has only one of the
+    // two edges (whichever direction the cycle-breaker dropped).
+    const graph = buildConcernGraph(concerns, ["ts"]);
+    expect(graph.dag.length).toBeLessThan(2);
+  });
+
+  it("breaks a 3-cycle", () => {
+    const concerns: Concern[] = [
+      { id: "a", kind: "feature", summary: "a", hunks: [], dependsOn: ["b"], confidence: 1, riskHints: { touchesPublicAPI: false, touchesConfig: false, touchesSecurity: false } },
+      { id: "b", kind: "feature", summary: "b", hunks: [], dependsOn: ["c"], confidence: 1, riskHints: { touchesPublicAPI: false, touchesConfig: false, touchesSecurity: false } },
+      { id: "c", kind: "feature", summary: "c", hunks: [], dependsOn: ["a"], confidence: 1, riskHints: { touchesPublicAPI: false, touchesConfig: false, touchesSecurity: false } },
+    ];
+    expect(() => buildConcernGraph(concerns, [])).not.toThrow();
+  });
 });
