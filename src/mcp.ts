@@ -135,18 +135,18 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "decompose",
-      description: "PREFERRED entry point. Decompose changes end-to-end: analyze, propose slices, find reviewers, materialize stacked branches/PRs. Pass target: { kind:'branch', repo, branch, base } against a committed feature branch (clean tree). IMPORTANT: dryRun defaults to TRUE — branches are created LOCALLY ONLY, nothing is pushed and NO PRs are opened. Pass dryRun:false to actually push + open PRs. The response includes `dryRun`, `pushed`, `prsCreated`, and `status` fields so you can verify what happened.",
+      description: "PREFERRED entry point. Decompose changes end-to-end: analyze, propose slices, find reviewers, materialize stacked branches/PRs. Works with uncommitted changes — auto-commits them to the current branch. Pass target: { kind:'branch', repo, branch, base } for a specific branch, or omit target to decompose the current working tree. IMPORTANT: dryRun defaults to TRUE — branches are created LOCALLY ONLY, nothing is pushed and NO PRs are opened. Pass dryRun:false to actually push + open PRs.",
       inputSchema: {
         type: "object" as const,
         properties: {
-          target: { type: "object" },
+          target: { type: "object", description: "Optional. Defaults to current working tree (auto-commits pending changes)." },
+          base: { type: "string", description: "Base branch to diff against (default: 'main')" },
           dryRun: { type: "boolean" },
           draftPRs: { type: "boolean" },
           pushRemote: { type: "string" },
           policy: { type: "string", enum: ["codeowners-strict", "blame-weighted", "expertise-graph"] },
           excludeUsers: { type: "array", items: { type: "string" } },
         },
-        required: ["target"],
       },
     },
     {
