@@ -75,12 +75,12 @@ export async function instrumentedApplySplit(input: Parameters<typeof applySplit
   const store = getStore();
   try {
     const proposal = input.proposal;
-    const key = graphKey({ concerns: [], dag: [], meta: { fileCount: 0, hunkCount: 0, loc: 0, languagesDetected: [] } } as unknown as ConcernGraph);
-    // Use the last known id for the proposal we just applied
     const id = _lastProposalId;
     if (id) {
-      const branches: string[] = (out as { branches?: string[] }).branches ?? [];
-      const prs: Array<{ url: string; sliceId: string }> = ((out as { prs?: Array<{ url: string; sliceId: string }> }).prs) ?? [];
+      const branches = out.created.map((c) => c.branch);
+      const prs = out.created
+        .filter((c): c is typeof c & { prUrl: string } => c.prUrl != null)
+        .map((c) => ({ url: c.prUrl, sliceId: c.sliceId }));
       store.attachApplyResult(id, { branches, prs, dryRun: !!input.dryRun });
     }
     store.logActivity({
@@ -90,8 +90,6 @@ export async function instrumentedApplySplit(input: Parameters<typeof applySplit
         : `Applied ${proposal.slices.length} slice(s)`,
       details: { sliceCount: proposal.slices.length, dryRun: !!input.dryRun },
     });
-    // unused — silence linter
-    void key;
   } catch { /* never fail */ }
   return out;
 }

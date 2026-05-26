@@ -81,8 +81,10 @@ export async function applyProposal(req: IncomingMessage, res: ServerResponse, i
       draftPRs: body.draftPRs,
       branchPrefix: body.branchPrefix,
     });
-    const branches: string[] = (result as { branches?: string[] }).branches ?? [];
-    const prs: Array<{ url: string; sliceId: string }> = ((result as { prs?: Array<{ url: string; sliceId: string }> }).prs) ?? [];
+    const branches: string[] = result.created.map((c) => c.branch);
+    const prs = result.created
+      .filter((c): c is typeof c & { prUrl: string } => c.prUrl != null)
+      .map((c) => ({ url: c.prUrl, sliceId: c.sliceId }));
     getStore().attachApplyResult(id, { branches, prs, dryRun: !!body.dryRun });
     getStore().logActivity({
       kind: "apply_split",
