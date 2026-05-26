@@ -89,8 +89,8 @@ describe("§S5 — score_review_effort never imports LLM client", async () => {
   });
 });
 
-describe("§S6 — propose_split rejects too many slices", () => {
-  it("throws TOO_MANY_SLICES when planner would produce > 16", async () => {
+describe("§S6 — propose_split caps slice count instead of failing", () => {
+  it("merges down to DEFAULT_MAX_SLICES (8) when planner would produce > 16", async () => {
     const concerns = Array.from({ length: 20 }, (_, i) => ({
       id: `c-${i}`,
       kind: "feature" as const,
@@ -105,10 +105,11 @@ describe("§S6 — propose_split rejects too many slices", () => {
       dag: [],
       meta: { hunkCount: 20, fileCount: 20, loc: 100, languagesDetected: ["ts"] },
     };
-    // Force every concern to its own slice; planner must refuse > 16.
-    await expect(
-      proposeSplit({ graph, maxConcernsPerSlice: 1 }),
-    ).rejects.toMatchObject({ code: "TOO_MANY_SLICES" });
+    // 20 independent concerns with maxConcernsPerSlice:1 would produce 20 slices.
+    // Both caps merge trailing groups; result must be ≤ 8.
+    const { proposal } = await proposeSplit({ graph, maxConcernsPerSlice: 1 });
+    expect(proposal.rejected).toBe(false);
+    expect(proposal.slices.length).toBeLessThanOrEqual(8);
   });
 });
 
