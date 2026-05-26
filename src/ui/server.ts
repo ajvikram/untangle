@@ -9,12 +9,13 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, statSync, createReadStream, readFileSync } from "node:fs";
 import { join, normalize, resolve, dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { generateToken, checkToken } from "./auth.js";
+import { checkToken } from "./auth.js";
 import { startSseStream } from "./sse.js";
 import { getStore } from "./state.js";
+import { loadOrCreateSession, updatePersistedPort, rotateSessionToken } from "./persist.js";
 import { sendError, sendJson } from "./routes/util.js";
 import {
-  listProposals, getProposal, reproposeProposal, applyProposal,
+  listProposals, getProposal, reproposeProposal, applyProposal, editProposal,
 } from "./routes/proposals.js";
 import {
   listPrsRoute, viewPrRoute, diffPrRoute, checksPrRoute,
@@ -68,7 +69,7 @@ function findStaticRoot(): string | null {
   return null;
 }
 
-function serveStatic(req: IncomingMessage, res: ServerResponse, root: string, pathname: string): boolean {
+function serveStatic(_req: IncomingMessage, res: ServerResponse, root: string, pathname: string): boolean {
   // Resolve & normalize; reject traversal attempts
   const cleanPath = normalize(pathname).replace(/^(\.\.[/\\])+/, "");
   let filePath = join(root, cleanPath === "/" || cleanPath === "" ? "index.html" : cleanPath);
@@ -104,7 +105,12 @@ function matchPath(pathname: string, pattern: string): RegExpMatchArray | null {
 }
 
 export async function startUiServer(opts: { logUrl?: boolean } = {}): Promise<UiServer> {
-  const token = generateToken();
+  // Stable token + preferred port across restarts (persisted to ~/.config/untangle/).
+  const session = loadOrCreateSession(Number(process.env.UNTANGLE_UI_PORT ?? 7842));
+  // `let` because POST /api/session/regenerate rotates it in place — the
+  // request handler reads via closure so subsequent requests see the new value.
+  let token = session.token;
+  let port = 0; // assigned after listen — request handler reads it via closure
   const staticRoot = findStaticRoot();
   const store = getStore();
 
@@ -168,9 +174,27 @@ export async function startUiServer(opts: { logUrl?: boolean } = {}): Promise<Ui
       // -------------------------------------------------------------------
       // Proposals
       // -------------------------------------------------------------------
+      // Rotate session token
+      if (pathname === "/api/session/regenerate" && req.method === "POST") {
+        const next = rotateSessionToken();
+        token = next.token;
+        const newUrl = `http://127.0.0.1:${port}/?t=${token}`;
+        logger.info("session_token_rotated", {});
+        return sendJson(res, 200, { token, url: newUrl });
+      }
+
       if (pathname === "/api/proposals" && req.method === "GET") return listProposals(req, res);
+      if (pathname === "/api/proposals" && req.method === "DELETE") {
+        store.clearProposals();
+        return sendJson(res, 200, { ok: true });
+      }
       let m = matchPath(pathname, "/api/proposals/:id");
       if (m && req.method === "GET") return getProposal(req, res, m[1]!);
+      if (m && req.method === "DELETE") {
+        const ok = store.deleteProposal(m[1]!);
+        return sendJson(res, ok ? 200 : 404, { ok });
+      }
+      if (m && req.method === "PUT") return editProposal(req, res, m[1]!);
       m = matchPath(pathname, "/api/proposals/:id/repropose");
       if (m && req.method === "POST") return reproposeProposal(req, res, m[1]!);
       m = matchPath(pathname, "/api/proposals/:id/apply");
@@ -232,26 +256,48 @@ export async function startUiServer(opts: { logUrl?: boolean } = {}): Promise<Ui
     }
   });
 
-  await new Promise<void>((resolveStart, rejectStart) => {
-    server.once("error", rejectStart);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", rejectStart);
-      resolveStart();
+  // Try preferred port first; on EADDRINUSE, retry with ephemeral.
+  const tryListen = (port: number): Promise<void> =>
+    new Promise((resolveListen, rejectListen) => {
+      const onError = (err: NodeJS.ErrnoException): void => {
+        server.off("error", onError);
+        rejectListen(err);
+      };
+      server.once("error", onError);
+      server.listen(port, "127.0.0.1", () => {
+        server.off("error", onError);
+        resolveListen();
+      });
     });
-  });
+
+  try {
+    await tryListen(session.preferredPort);
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EADDRINUSE" || code === "EACCES") {
+      logger.info("ui_port_busy_fallback", { preferredPort: session.preferredPort });
+      await tryListen(0);
+    } else {
+      throw err;
+    }
+  }
 
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Failed to bind UI server");
   }
-  const port = address.port;
+  port = address.port;
   const url = `http://127.0.0.1:${port}/?t=${token}`;
 
+  // Persist the actually-bound port so next restart prefers it
+  // (only when it differs from the previously-persisted preferredPort).
+  if (port !== session.preferredPort) updatePersistedPort(port);
+
   if (opts.logUrl !== false) {
-    // Print prominently to stderr so it appears in the MCP host logs
     process.stderr.write(`\n[untangle-ui] http://127.0.0.1:${port}/?t=${token}\n`);
+    process.stderr.write(`[untangle-ui] (token persisted to ~/.config/untangle/session.json — same URL across restarts)\n`);
   }
-  logger.info("ui_server_started", { port, hasStatic: !!staticRoot });
+  logger.info("ui_server_started", { port, hasStatic: !!staticRoot, stableToken: true });
 
   const stop = async (): Promise<void> => {
     await new Promise<void>((r) => server.close(() => r()));

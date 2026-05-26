@@ -5,7 +5,7 @@
 
 import { parseArgs } from "node:util";
 import * as fs from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { scoreReviewEffort } from "./tools/score-review-effort.js";
 import { analyzeDiff } from "./tools/analyze-diff.js";
 import { proposeSplit } from "./tools/propose-split.js";
@@ -138,7 +138,7 @@ async function main() {
         
         // Resolve current git branch and repo details
         const repoPath = fs.realpathSync(values.repo!);
-        const currentBranch = execSync("git branch --show-current", { cwd: repoPath }).toString().trim() || "main";
+        const currentBranch = execFileSync("git", ["branch", "--show-current"], { cwd: repoPath }).toString().trim() || "main";
         
         const result = await applySplit({
           proposal,
@@ -167,7 +167,7 @@ async function main() {
           },
         });
         const repoPath = fs.realpathSync(values.repo!);
-        const currentBranch = values.branch || execSync("git branch --show-current", { cwd: repoPath }).toString().trim() || "main";
+        const currentBranch = values.branch || execFileSync("git", ["branch", "--show-current"], { cwd: repoPath }).toString().trim() || "main";
         const excludeUsers = values.exclude ? values.exclude.split(",").map(u => u.trim()) : [];
         
         const result = await decompose({

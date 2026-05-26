@@ -5,22 +5,23 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { exec } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { logger } from "../util/logger.js";
 import { withTimeout } from "../util/timeout.js";
 import type { RouteReviewersInput, RouteReviewersOutput, Reviewer, SliceAssignment } from "../schemas/types.js";
 
-// Helper to run a command in a directory
-function execAsync(cmd: string, cwd: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    exec(cmd, { cwd }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(stderr || err.message));
-      } else {
-        resolve(stdout);
-      }
-    });
-  });
+const execFileP = promisify(execFile);
+
+/** Run a command using execFile (no shell — no injection). */
+async function gitExec(args: string[], cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execFileP("git", args, { cwd });
+    return stdout;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(msg);
+  }
 }
 
 // Simple pattern matcher matching CODEOWNERS style rules
@@ -128,7 +129,7 @@ async function blameHunk(
     const fromLine = Math.max(1, startLine - 5);
     const toLine = startLine + 5;
     try {
-      const output = await execAsync(`git blame -p -L ${fromLine},${toLine} -- "${filePath}"`, repoPath);
+      const output = await gitExec(["blame", "-p", "-L", `${fromLine},${toLine}`, "--", filePath], repoPath);
       return parseBlameOutput(output);
     } catch {
       return [];
@@ -136,12 +137,15 @@ async function blameHunk(
   }
 
   try {
-    const output = await execAsync(`git blame -p -L ${startLine},${startLine + lineCount - 1} -- "${filePath}"`, repoPath);
+    const output = await gitExec(
+      ["blame", "-p", "-L", `${startLine},${startLine + lineCount - 1}`, "--", filePath],
+      repoPath,
+    );
     return parseBlameOutput(output);
   } catch {
     // Try blame without range limits if it fails (e.g. file changed line counts)
     try {
-      const output = await execAsync(`git blame -p -- "${filePath}"`, repoPath);
+      const output = await gitExec(["blame", "-p", "--", filePath], repoPath);
       return parseBlameOutput(output);
     } catch {
       return [];

@@ -19,14 +19,16 @@ import {
 import {
   gitStatus, gitDiff, gitLog, gitShow, gitBranch,
   gitCommit, gitPush, gitCheckout,
+  gitStash, gitStashPop, gitStashList, gitStashDrop,
 } from "./tools/git-ops.js";
 import {
   prList, prView, prDiff, prChecks,
   prReview, prComment, prReviewDismiss, prRequestReviewers,
-  prMerge, prReady, prClose, prReopen,
+  prMerge, prReady, prClose, prReopen, prCreate, ghAuthStatus,
 } from "./tools/pr-ops.js";
 import { startUiServer } from "./ui/server.js";
 import { uiOpen, registerUiServer } from "./tools/ui-open.js";
+import { flushPendingState } from "./ui/persist.js";
 import { registerMcpServer } from "./llm/client.js";
 import { registerServerForWorkspace, discoverWorkspaceRoot } from "./util/workspace.js";
 import { logger } from "./util/logger.js";
@@ -146,6 +148,68 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ["target"],
       },
+    },
+    {
+      name: "git_stash",
+      description: "Stash uncommitted changes. Returns the created stash ref (e.g. 'stash@{0}').",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          message: { type: "string" },
+          includeUntracked: { type: "boolean" },
+          keepIndex: { type: "boolean" },
+        },
+      },
+    },
+    {
+      name: "git_stash_list",
+      description: "List stashes in the repo.",
+      inputSchema: { type: "object" as const, properties: { repo: { type: "string" } } },
+    },
+    {
+      name: "git_stash_pop",
+      description: "Pop a stash (apply and drop). Pass `apply:true` to apply without dropping.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          ref: { type: "string", description: "Stash ref like 'stash@{0}' (default: top of stack)" },
+          apply: { type: "boolean", description: "Apply but don't drop the stash" },
+        },
+      },
+    },
+    {
+      name: "git_stash_drop",
+      description: "Drop a stash without applying it.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          ref: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "pr_create",
+      description: "Create a new pull request from `head` to `base`. Pass `draft:true` for a draft PR.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          repo: { type: "string" },
+          base: { type: "string" },
+          head: { type: "string" },
+          title: { type: "string" },
+          body: { type: "string" },
+          draft: { type: "boolean" },
+        },
+        required: ["base", "head", "title"],
+      },
+    },
+    {
+      name: "gh_auth_status",
+      description: "Check whether the GitHub CLI (`gh`) is authenticated. Use this before PR ops to diagnose auth failures.",
+      inputSchema: { type: "object" as const, properties: { repo: { type: "string" } } },
     },
     {
       name: "ui_open",
@@ -475,6 +539,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "git_commit":   result = await gitCommit(args as unknown as Parameters<typeof gitCommit>[0]); break;
       case "git_push":     result = await gitPush(args as unknown as Parameters<typeof gitPush>[0]); break;
       case "git_checkout": result = await gitCheckout(args as unknown as Parameters<typeof gitCheckout>[0]); break;
+      case "git_stash":      result = await gitStash(args as unknown as Parameters<typeof gitStash>[0]); break;
+      case "git_stash_list": result = await gitStashList(args as unknown as Parameters<typeof gitStashList>[0]); break;
+      case "git_stash_pop":  result = await gitStashPop(args as unknown as Parameters<typeof gitStashPop>[0]); break;
+      case "git_stash_drop": result = await gitStashDrop(args as unknown as Parameters<typeof gitStashDrop>[0]); break;
 
       // PR introspection
       case "pr_list":   result = await prList(args as unknown as Parameters<typeof prList>[0]); break;
@@ -493,6 +561,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "pr_ready":  result = await prReady(args as unknown as Parameters<typeof prReady>[0]); break;
       case "pr_close":  result = await prClose(args as unknown as Parameters<typeof prClose>[0]); break;
       case "pr_reopen": result = await prReopen(args as unknown as Parameters<typeof prReopen>[0]); break;
+      case "pr_create": result = await prCreate(args as unknown as Parameters<typeof prCreate>[0]); break;
+
+      // gh
+      case "gh_auth_status": result = await ghAuthStatus(args as unknown as Parameters<typeof ghAuthStatus>[0]); break;
 
       // UI
       case "ui_open":   result = await uiOpen(args as unknown as Parameters<typeof uiOpen>[0]); break;
@@ -528,10 +600,12 @@ async function main() {
       const ui = await startUiServer({ logUrl: true });
       registerUiServer({ url: ui.url, port: ui.port, token: ui.token, staticRoot: ui.staticRoot });
       const shutdown = async (): Promise<void> => {
+        flushPendingState();           // sync — must run before process exit
         await ui.stop().catch(() => {});
       };
       process.on("SIGINT",  () => { void shutdown().then(() => process.exit(0)); });
       process.on("SIGTERM", () => { void shutdown().then(() => process.exit(0)); });
+      process.on("beforeExit", () => flushPendingState());
       transport.onclose = () => { void shutdown(); };
     } catch (err) {
       logger.warn("ui_server_failed_to_start", { error: err instanceof Error ? err.message : String(err) });

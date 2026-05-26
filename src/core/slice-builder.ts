@@ -161,7 +161,7 @@ export function buildSlices(graph: ConcernGraph, opts: SliceBuildOptions): Slice
   }
 
   // Convert groups to Slice objects
-  const slices: Slice[] = sliceGroups.map((group, index) => {
+  const slices: Slice[] = sliceGroups.map((group) => {
     const hunks = group.flatMap((c) => c.hunks);
     const primarySummary = group[0]!.summary;
     const title = group.length === 1
