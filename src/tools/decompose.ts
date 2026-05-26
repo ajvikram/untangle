@@ -7,20 +7,25 @@ import { analyzeDiff } from "./analyze-diff.js";
 import { proposeSplit } from "./propose-split.js";
 import { routeReviewers } from "./route-reviewers.js";
 import { applySplit } from "./apply-split.js";
+import { GitWrapper } from "../core/git.js";
 import { normalizeTarget, UntangleErrorImpl } from "../schemas/types.js";
 import type { Target } from "../schemas/types.js";
 
 /**
- * decompose materializes slices as commits on stacked branches via apply_split,
- * which can only address hunks present in `git diff base...branch`. Refuse early
- * for shapes that can't produce branches.
+ * If the target is kind:'working' and the tree is dirty, auto-commit everything
+ * to the current branch and return a kind:'branch' target so apply_split can run.
+ * Avoids asking the user to manually commit before every decompose.
  */
-function assertApplyableTarget(target: Target): asserts target is Extract<Target, { kind: "branch" }> {
-  if (target.kind === "branch") return;
+async function resolveToCommittedTarget(
+  target: Target,
+  base: string,
+): Promise<Extract<Target, { kind: "branch" }>> {
+  if (target.kind === "branch") return target;
+
   if (target.kind === "pr") {
     throw new UntangleErrorImpl(
       "NOT_IMPLEMENTED",
-      "decompose with kind:'pr' is not yet supported. Fetch the PR diff with pr_diff and pass it as kind:'diff' to analyze_diff, then drive apply_split manually.",
+      "decompose with kind:'pr' is not yet supported. Use pr_diff to fetch the diff, pass it as kind:'diff' to analyze_diff, then call apply_split manually.",
       false,
     );
   }
@@ -31,21 +36,31 @@ function assertApplyableTarget(target: Target): asserts target is Extract<Target
       false,
     );
   }
-  // kind === 'working' — uncommitted changes cannot be materialized as stacked
-  // branches because apply_split slices hunks out of `git diff base...branch`,
-  // which only sees committed history. Refuse early with a clear path forward.
-  throw new UntangleErrorImpl(
-    "BAD_INPUT",
-    "decompose cannot materialize uncommitted (working-tree) changes as stacked branches. " +
-      "Commit your changes first (use git_commit), then re-run decompose with " +
-      "{ kind:'branch', repo, branch: <your-branch>, base: <base-branch> }. " +
-      "(analyze_diff alone supports kind:'working' for read-only inspection.)",
-    false,
-  );
+
+  // kind === 'working': auto-commit any pending changes to the current branch
+  const git = new GitWrapper(target.repo);
+  const branch = await git.currentBranch();
+  if (!branch) {
+    throw new UntangleErrorImpl(
+      "BAD_INPUT",
+      "decompose requires a branch — detached HEAD is not supported. Check out a branch first.",
+      false,
+    );
+  }
+
+  const status = await git.status();
+  const hasPending = !status.clean;
+  if (hasPending) {
+    await git.addAll();
+    await git.commit("wip: auto-commit for decompose");
+  }
+
+  return { kind: "branch", repo: target.repo, branch, base };
 }
 
 export interface DecomposeInput {
   target: Target;
+  base?: string;
   dryRun?: boolean;
   draftPRs?: boolean;
   pushRemote?: string;
@@ -76,6 +91,7 @@ export interface DecomposeOutput {
 
 export async function decompose(input: DecomposeInput): Promise<DecomposeOutput> {
   const {
+    base = "main",
     dryRun = true,
     draftPRs = true,
     pushRemote = "origin",
@@ -83,9 +99,10 @@ export async function decompose(input: DecomposeInput): Promise<DecomposeOutput>
     excludeUsers = [],
     branchPrefix = "untangle/",
   } = input;
-  const target = normalizeTarget(input.target);
-  // Validate up front so we don't burn an LLM call analyzing a target we can't act on.
-  assertApplyableTarget(target);
+
+  // Auto-commit uncommitted changes and resolve to a branch target.
+  // This removes the need for callers to manually commit before calling decompose.
+  const target = await resolveToCommittedTarget(normalizeTarget(input.target), base);
 
   // 1. Analyze the diff
   const analysis = await analyzeDiff({ target });
