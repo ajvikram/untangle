@@ -135,7 +135,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: "decompose",
-      description: "PREFERRED entry point. Decompose changes end-to-end: analyze, propose slices, find reviewers, materialize stacked branches/PRs. Pass target: { kind:'branch', repo, branch, base } against a committed feature branch (clean tree). Use this instead of calling analyze_diff/propose_split/apply_split individually.",
+      description: "PREFERRED entry point. Decompose changes end-to-end: analyze, propose slices, find reviewers, materialize stacked branches/PRs. Pass target: { kind:'branch', repo, branch, base } against a committed feature branch (clean tree). IMPORTANT: dryRun defaults to TRUE — branches are created LOCALLY ONLY, nothing is pushed and NO PRs are opened. Pass dryRun:false to actually push + open PRs. The response includes `dryRun`, `pushed`, `prsCreated`, and `status` fields so you can verify what happened.",
       inputSchema: {
         type: "object" as const,
         properties: {

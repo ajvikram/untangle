@@ -250,6 +250,13 @@ export async function applySplit(input: ApplySplitInput): Promise<ApplySplitOutp
     }
 
     // Push branches and create PRs if not dry-run
+    if (dryRun) {
+      logs.push(JSON.stringify({
+        op: "dry_run_skip",
+        message: `dryRun=true — skipped push to ${pushRemote} and PR creation for ${created.length} branch(es). Re-run with dryRun:false to materialize.`,
+        skippedBranches: created.map((c) => c.branch),
+      }));
+    }
     if (!dryRun) {
       for (let i = 0; i < created.length; i++) {
         const entry = created[i]!;
